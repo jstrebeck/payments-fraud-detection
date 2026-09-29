@@ -1,0 +1,115 @@
+# Architecture
+
+## Purpose
+
+Score card payments for fraud in real time and keep the model healthy over
+time with as little manual work as possible. The business logic is
+deliberately thin; the interesting part is the machinery around the model.
+
+## Components
+
+| Component | Where | Runtime | Responsibility |
+|---|---|---|---|
+| Synthetic generator | `ml/data` | library + CLI | Deterministic customers, merchants, cards, transactions, injected fraud patterns. Single source of truth for data. |
+| Feature library | `ml/features` | library | Pure functions: transaction (+ rolling context) to feature vector. Shared by training and serving. |
+| Training | `ml/training` | K8s Job / CronJob image | Featurise with `ml.features`, train LightGBM, evaluate, log to MLflow, register. |
+| Evaluation and gate | `ml/evaluation`, `scripts/promote.py` | in training image | Champion vs challenger; set `champion` alias only on a win. |
+| MLflow | homelab repo | Deployment | Tracking server + model registry. Postgres backend, S3 artifact store (SeaweedFS, ADR-0011). |
+| KServe | homelab repo (install), `deploy/` (InferenceService) | RawDeployment | Serves the `champion` model version using the MLflow/MLServer runtime, V2 inference protocol. |
+| payments-api | `services/payments-api` | Deployment | `POST /payments`: validate, featurise, score via KServe, persist decision, respond. |
+| simulator | `services/simulator` | Deployment (cluster) / CLI (local) | Drives traffic and delayed label feedback. |
+| Postgres (payments) | homelab repo | StatefulSet | Decision log and labels. Source for retraining. |
+| Drift job | `ml/evaluation` | CronJob | Compare live feature distributions to training reference; export metrics. |
+| Prometheus / Grafana | homelab repo (stack), `dashboards/` (this repo) | existing | Metrics, dashboards, alerts. |
+| Argo CD | homelab repo | existing after Phase 5 | Syncs `deploy/overlays/homelab` into namespace `fraud`. |
+| GitHub Actions | `.github/workflows` | self-hosted runner VM | Lint, test, build, push, bump tag, trigger training. |
+
+## Request path (online)
+
+1. Simulator sends `POST /payments` with a transaction (card token, amount,
+   merchant, timestamp, device, geo, channel).
+2. API validates with Pydantic, loads the card's recent history from
+   Postgres (last 7 days, at most 100 rows; ADR-0010), and calls
+   `ml.features.build_features`.
+3. API calls the `FraudScorer`. In the cluster this is `KServeScorer`, which
+   POSTs to the `InferenceService` V2 endpoint with a timeout. On timeout or
+   error it falls back to `RuleScorer` and increments a fallback counter.
+4. Decision policy maps score to `approved | review | declined` using
+   thresholds held in config (so they can be tuned without a retrain).
+5. Decision, score, model version and features are written to Postgres.
+   Response returns the decision and a payment ID.
+6. Later, the simulator posts `POST /payments/{id}/feedback` with
+   `fraud | legit` for a sample, simulating chargebacks. Labels land in the
+   same table.
+
+## Training path (offline)
+
+1. Training image starts as a Kubernetes Job (manual, scheduled, or from a
+   GitHub workflow dispatch).
+2. Data source is either generator output (Phases 1 to 6) or labelled
+   decisions from Postgres (Phase 7). Both produce the same Parquet schema.
+3. Features computed with the same `ml.features` code the API uses, then a
+   time-based split. LightGBM is trained on the feature vector; the
+   registered model takes named features and returns `predict_proba`, and is
+   tagged with its `feature_version` (ADR-0013).
+4. Metrics, parameters, evaluation report, model card and the model are
+   logged to MLflow. The model is registered as `fraud-detector`.
+5. The gate compares the new version to the `champion` alias on the most
+   recent held-out window. Win means the alias moves; otherwise the version
+   stays registered but unaliased.
+6. The `InferenceService` references the model by alias-resolved URI. Moving
+   the alias plus a rollout (or a KServe model reload) puts the new version
+   into service. Exact mechanism is decided in Phase 4 and recorded in
+   ADR-0006.
+
+## Delivery path
+
+1. PR opened. CI runs lint, type checks, tests on the self-hosted runner.
+2. Merge to `main`. Build workflow builds `payments-api`, `simulator`,
+   `trainer` images, tags them with the git SHA, pushes to the in-cluster
+   registry.
+3. Workflow updates `deploy/overlays/homelab/kustomization.yaml` image tags
+   and commits (or opens an auto-merged PR).
+4. Argo CD notices the change and syncs namespace `fraud`.
+
+## Namespaces and naming
+
+- Namespace: `fraud`
+- Model name in MLflow registry: `fraud-detector`; aliases `champion` and
+  `challenger`
+- InferenceService: `fraud-detector`
+- Images: `192.168.2.203:5000/fraud/payments-api`, `.../fraud/simulator`,
+  `.../fraud/trainer`
+- Metric prefix: `fraud_`
+
+## Key metrics
+
+| Metric | Type | Why |
+|---|---|---|
+| `fraud_payments_total{decision}` | counter | Decision mix; sudden change means model or traffic changed |
+| `fraud_score` | histogram | Score distribution; drift signal without labels |
+| `fraud_scorer_latency_seconds{scorer}` | histogram | Model latency budget |
+| `fraud_scorer_fallback_total{reason}` | counter | Serving health |
+| `fraud_model_version_info{version}` | gauge | Which version is live |
+| `fraud_payments_replayed_total` | counter | Idempotent replays of an already-scored transaction |
+| `fraud_http_requests_total{method,route,status}`, `fraud_http_request_duration_seconds` | counter, histogram | RED metrics for every route |
+| `fraud_sim_decisions_total{decision,truth}` | counter | Simulator side: live confusion counts against ground truth |
+| `fraud_feature_psi{feature}` | gauge | Drift per feature (Phase 7) |
+| `fraud_labelled_precision`, `fraud_labelled_recall` | gauge | Delayed ground-truth quality (Phase 7) |
+
+## Data schema (transactions)
+
+Defined once in `ml/data/schema.py` as a Pydantic model, imported everywhere
+else. The matching PyArrow schema for Parquet is in `ml/data/io.py` (kept
+separate so the API does not need pyarrow). Fields (initial): `transaction_id`, `timestamp`,
+`card_token`, `customer_id`, `merchant_id`, `merchant_category`, `amount`,
+`currency`, `channel` (`card_present | ecommerce | recurring`),
+`device_id`, `ip_country`, `billing_country`, `is_fraud` (training only),
+`fraud_pattern` (training only, for per-pattern recall).
+
+## Non-goals
+
+- Real PCI-scope handling. Cards are opaque tokens.
+- A UI. Grafana and MLflow are the UI.
+- Multi-cluster or cloud deployment. The homelab is the target; the Terraform
+  for EKS in the homelab repo is unrelated.

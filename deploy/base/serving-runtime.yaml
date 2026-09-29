@@ -1,0 +1,81 @@
+# Namespaced serving runtime for fraud-detector (ADR-0014). KServe's stock
+# kserve-mlserver runtime (MLServer 1.5.0, Python <= 3.11, MLflow 2.x) cannot
+# load the MLflow 3.16 skops-format model, so this points at our own image
+# built from ml/serving/Dockerfile.
+#
+# The server-type annotation makes KServe treat this as MLServer: it defaults
+# the isvc to protocol v2 and injects MLSERVER_MODEL_NAME (= isvc name) and
+# MLSERVER_MODEL_URI (= /mnt/models, where the storage initializer puts the model).
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: fraud-mlserver
+  namespace: fraud
+  annotations:
+    serving.kserve.io/server-type: mlserver
+spec:
+  annotations:
+    prometheus.kserve.io/port: "8082"
+    prometheus.kserve.io/path: /metrics
+  supportedModelFormats:
+    - name: mlflow
+      version: "3"
+      autoSelect: false
+  protocolVersions:
+    - v2
+  containers:
+    - name: kserve-container
+      image: 192.168.2.203:5000/fraud/serving:mlserver-1.7.1-mlflow-3.16.1
+      env:
+        - name: MLSERVER_MODEL_IMPLEMENTATION
+          value: mlserver_mlflow.MLflowRuntime
+        - name: MLSERVER_HTTP_PORT
+          value: "8080"
+        - name: MLSERVER_GRPC_PORT
+          value: "9000"
+        - name: MLSERVER_METRICS_PORT
+          value: "8082"
+      ports:
+        - name: http1
+          containerPort: 8080
+          protocol: TCP
+        - name: metrics
+          containerPort: 8082
+          protocol: TCP
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+        seccompProfile:
+          type: RuntimeDefault
+      # Measured locally: ~210Mi RSS after load, ready in ~4s.
+      resources:
+        requests:
+          cpu: 100m
+          memory: 384Mi
+        limits:
+          cpu: "1"
+          memory: 768Mi
+      readinessProbe:
+        httpGet:
+          path: /v2/health/ready
+          port: 8080
+        initialDelaySeconds: 5
+        periodSeconds: 10
+      livenessProbe:
+        httpGet:
+          path: /v2/health/live
+          port: 8080
+        initialDelaySeconds: 15
+        periodSeconds: 20
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: tmp
+      emptyDir: {}

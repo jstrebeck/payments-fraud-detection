@@ -1,0 +1,78 @@
+# Workspace root. Not a package itself; it holds the shared dev tooling and
+# the configuration for ruff, mypy and pytest. See ADR-0009.
+
+[tool.uv.workspace]
+members = ["ml", "services/payments-api", "services/simulator"]
+
+[tool.uv.sources]
+ml = { workspace = true }
+payments-api = { workspace = true }
+simulator = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "ml[train]",
+    "payments-api",
+    "simulator",
+    "aiosqlite>=0.22",
+    "httpx2>=2.13",
+    "mypy>=2.3.1",
+    "pandas-stubs>=3.0",
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.9",
+    "types-pyyaml>=6.0",
+]
+
+[tool.uv]
+required-version = ">=0.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["services/payments-api/payments_api/migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "N", "ASYNC", "PT", "C4", "PTH"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ml", "payments_api", "simulator"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# Tests are type-checked, but without the strict annotation requirements.
+module = ["ml.tests.*", "tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+# No type information published for these.
+module = ["pyarrow", "pyarrow.*", "sklearn", "sklearn.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["ml/tests", "services/payments-api/tests", "services/simulator/tests"]
+addopts = ["--import-mode=importlib", "--strict-markers", "-ra"]
+filterwarnings = [
+    "error",
+    # Third-party warnings we cannot fix (tests use MLflow's SQLite store):
+    "ignore:The ``noload`` loader strategy is deprecated:DeprecationWarning",
+    "ignore:.*Any type hint is inferred as AnyType:UserWarning",  # raised inside mlflow's imports
+]
+
+[tool.coverage.run]
+# SQLAlchemy async runs DB work in greenlets; without this those lines look uncovered.
+concurrency = ["greenlet", "thread"]
+source = ["ml", "payments_api", "simulator"]
+omit = ["*/tests/*", "*/migrations/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Smoke test for a running payments API (Phase 1).
+# Usage: scripts/smoke.sh [base-url]   (default http://localhost:8000)
+# Checks /healthz, /readyz, posts one payment, reads it back, and checks
+# that it shows up in /metrics. Exits non-zero on the first failure.
+set -euo pipefail
+
+API="${1:-http://localhost:8000}"
+TXN_ID="smoke-$(date +%s)-$RANDOM"
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+json() { python3 -c "import json,sys; print(json.load(sys.stdin)$1)"; }
+
+curl -fsS "$API/healthz" >/dev/null || fail "/healthz"
+curl -fsS "$API/readyz" >/dev/null || fail "/readyz"
+echo "ok   health and readiness"
+
+body=$(cat <<JSON
+{"transaction_id": "$TXN_ID", "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+ "card_token": "tok_00000000000000aa", "customer_id": "cus_smoke", "merchant_id": "mer_smoke",
+ "merchant_category": "grocery", "amount": 12.34, "currency": "USD", "channel": "card_present",
+ "device_id": "dev_smoke", "ip_country": "US", "billing_country": "US"}
+JSON
+)
+resp=$(curl -fsS -X POST "$API/payments" -H 'content-type: application/json' -d "$body") \
+    || fail "POST /payments"
+decision=$(json '["decision"]' <<<"$resp")
+payment_id=$(json '["payment_id"]' <<<"$resp")
+[[ "$decision" =~ ^(approved|review|declined)$ ]] || fail "unexpected decision: $resp"
+echo "ok   POST /payments -> $decision ($payment_id)"
+
+curl -fsS "$API/payments/$payment_id" | json '["transaction"]["transaction_id"]' \
+    | grep -qx "$TXN_ID" || fail "GET /payments/$payment_id"
+echo "ok   GET /payments/{id}"
+
+curl -fsS "$API/metrics" | grep -q '^fraud_payments_total' || fail "/metrics"
+echo "ok   /metrics"
+echo "smoke test passed"

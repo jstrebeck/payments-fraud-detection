@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.python-version
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+dist/
+build/
+
+# Env and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Data and model artifacts (generated, never committed)
+/data/
+*.parquet
+*.csv
+!**/tests/fixtures/*.csv
+mlruns/
+mlartifacts/
+/models/
+*.pkl
+*.joblib
+
+# Local infra
+docker-compose.override.yml
+.minio/
+.postgres/
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Node (dashboards tooling, if any)
+node_modules/

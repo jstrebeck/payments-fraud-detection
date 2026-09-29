@@ -1,0 +1,46 @@
+[project]
+name = "ml"
+version = "0.1.0"
+description = "Synthetic data, feature engineering, training and evaluation for the fraud model"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic>=2.13",
+]
+
+[project.optional-dependencies]
+# The generator and batch featurisation. The payments API does not need these,
+# so they stay out of its image.
+data = [
+    "numpy>=2.5",
+    "pyarrow>=25.0",
+]
+# Loading and scoring a registered model in-process (the API's MlflowScorer).
+# MLflow client must match the homelab server's major version (ADR-0012).
+score = [
+    "lightgbm>=4.7",
+    "mlflow-skinny>=3.16,<4",
+    "pandas>=3.0",
+    "scikit-learn>=1.9",
+    "skops>=0.16",  # MLflow's safe sklearn serialisation format (default in 3.x)
+]
+# Training, evaluation and the promotion gate.
+train = [
+    "ml[data,score]",
+    "pydantic-settings>=2.15",
+    "pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# This directory *is* the `ml` package (ml/data, ml/features, ...), so map the
+# package name onto "." instead of using a src/ layout.
+package-dir = { "ml" = "." }
+packages = ["ml", "ml.data", "ml.features", "ml.training", "ml.evaluation"]
+
+[tool.setuptools.package-data]
+ml = ["py.typed"]
+"ml.training" = ["*.yaml"]
+"ml.evaluation" = ["*.md"]

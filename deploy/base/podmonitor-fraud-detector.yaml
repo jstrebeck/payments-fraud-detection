@@ -1,0 +1,17 @@
+# Scrapes MLServer's Prometheus endpoint (:8082/metrics) on the predictor pods.
+# A PodMonitor because KServe's predictor Service only exposes the inference port.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: fraud-detector
+  namespace: fraud
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      serving.kserve.io/inferenceservice: fraud-detector
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s

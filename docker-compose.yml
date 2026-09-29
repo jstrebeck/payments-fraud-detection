@@ -1,0 +1,113 @@
+# Local development stack. `make dev` to start, `make simulate` to drive
+# traffic, `make down` to stop. Not used in the cluster: there, MLflow,
+# Postgres and S3 come from the homelab repo (ADR-0002).
+#
+# MLflow: development uses the homelab MLflow by default (ADR-0012). The `s3`
+# and `mlflow` services below only start with the `local-mlflow` profile
+# (`make dev-mlflow`), for working without the homelab.
+# All credentials here are throwaway local-dev values.
+
+name: payments-fraud
+
+x-s3-credentials: &s3-credentials
+  AWS_ACCESS_KEY_ID: fraud
+  AWS_SECRET_ACCESS_KEY: fraud-local-only
+
+x-api-image: &api-image
+  build:
+    context: .
+    dockerfile: services/payments-api/Dockerfile
+  image: payments-fraud/payments-api:local
+
+services:
+  postgres:
+    image: postgres:17.11-trixie
+    environment:
+      POSTGRES_USER: fraud
+      POSTGRES_PASSWORD: fraud
+      POSTGRES_DB: payments
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/10-mlflow.sql:ro
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "fraud", "-d", "payments"]
+      interval: 2s
+      retries: 30
+
+  s3:
+    # SeaweedFS S3 gateway in place of MinIO (ADR-0011).
+    image: chrislusf/seaweedfs:4.48
+    profiles: ["local-mlflow"]
+    command: >-
+      server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json
+      -master.volumeSizeLimitMB=256 -volume.max=0
+    volumes:
+      - s3-data:/data
+      - ./docker/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    ports: ["8333:8333"]
+    healthcheck:
+      # The S3 gateway starts after the master; check the port clients use.
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8333"]
+      interval: 2s
+      retries: 30
+
+  mlflow:
+    build: docker/mlflow
+    image: payments-fraud/mlflow:local
+    profiles: ["local-mlflow"]
+    environment:
+      <<: *s3-credentials
+      MLFLOW_BACKEND_STORE_URI: postgresql://fraud:fraud@postgres:5432/mlflow
+      MLFLOW_S3_ENDPOINT_URL: http://s3:8333
+      MLFLOW_BUCKET: mlflow-artifacts
+    depends_on:
+      postgres: { condition: service_healthy }
+      s3: { condition: service_healthy }
+    ports: ["5000:5000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 3s
+      retries: 40
+
+  migrate:
+    <<: *api-image
+    command: ["payments-api-migrate"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://fraud:fraud@postgres:5432/payments
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  payments-api:
+    <<: *api-image
+    environment:
+      DATABASE_URL: postgresql+asyncpg://fraud:fraud@postgres:5432/payments
+      # The registry's `champion`, loaded in-process and hot-reloaded when the
+      # alias moves; rules take over while there is none (ADR-0013).
+      FRAUD_SCORER: ${API_FRAUD_SCORER:-mlflow}
+      MLFLOW_TRACKING_URI: ${API_MLFLOW_TRACKING_URI:-http://192.168.2.202}
+      MODEL_REFRESH_SECONDS: "30"
+      LOG_FORMAT: json
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    ports: ["8000:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
+      interval: 2s
+      retries: 30
+
+  simulator:
+    build:
+      context: .
+      dockerfile: services/simulator/Dockerfile
+    image: payments-fraud/simulator:local
+    profiles: ["sim"]
+    environment:
+      SIMULATOR_API_URL: http://payments-api:8000
+    depends_on:
+      payments-api: { condition: service_healthy }
+    command: ["run", "--rps", "20", "--duration", "60s"]
+
+volumes:
+  postgres-data:
+  s3-data:

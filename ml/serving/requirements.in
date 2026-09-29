@@ -1,0 +1,19 @@
+# Serving runtime for the registered fraud-detector model (ADR-0014).
+#
+# The model pins below MUST equal the versions that trained the model, i.e.
+# the workspace's uv.lock (ml.training.MODEL_REQUIREMENTS plus mlflow-skinny).
+# ml/tests/test_serving_requirements.py fails when they drift.
+# After editing, regenerate the lock:
+#   uv pip compile --python-version 3.12 ml/serving/requirements.in -o ml/serving/requirements.txt
+#
+# mlserver-mlflow is installed separately with --no-deps (see Dockerfile):
+# it depends on the full `mlflow` package (server, UI, Flask...), but only
+# needs the pyfunc loader that mlflow-skinny already provides.
+mlserver==1.7.1
+
+mlflow-skinny==3.16.1
+lightgbm==4.7.0
+scikit-learn==1.9.1
+skops==0.16.0
+numpy==2.5.3
+pandas==3.0.6
