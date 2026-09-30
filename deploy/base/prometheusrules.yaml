@@ -109,9 +109,11 @@ spec:
         - alert: FraudModelVersionChanged
           # More than one live version reported in 15 minutes = a promotion or
           # rollback went out. Informational: confirms the change landed.
+          # A starting API pod reports "unknown" until its first model response,
+          # which is not a version change.
           expr: |
             count(count by (version) (
-              count_over_time(fraud_model_version_info{scorer="kserve"}[15m]))) > 1
+              count_over_time(fraud_model_version_info{scorer="kserve", version!="unknown"}[15m]))) > 1
           labels:
             severity: info
           annotations:

@@ -101,7 +101,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (version) (fraud_model_version_info{scorer=\"kserve\"})",
+          "expr": "max by (version) (fraud_model_version_info{scorer=\"kserve\", version!=\"unknown\"})",
           "legendFormat": "{{version}}",
           "refId": "A",
           "range": false,
