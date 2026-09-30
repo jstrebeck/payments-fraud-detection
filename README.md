@@ -1,6 +1,8 @@
 # Payments Fraud Detection
 
 [![ci](https://github.com/jstrebeck/payments-fraud-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/jstrebeck/payments-fraud-detection/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](pyproject.toml)
 
 An end-to-end MLOps showcase: a synthetic payments platform that scores every
 transaction for fraud in real time, with the full lifecycle of the model
@@ -26,27 +28,10 @@ running on a self-hosted Kubernetes homelab.
 
 ## Architecture at a glance
 
-```
-                    ┌──────────────────────────────────────────────────────┐
-                    │  Kubernetes homelab (Talos)                          │
-                    │                                                      │
-  simulator ──HTTP──►  payments-api ──/v2/models/fraud:predict──► KServe   │
-  (synthetic          (FastAPI)                                InferenceService
-   traffic)             │   ▲                                   │          │
-                        │   └── decision + score ◄──────────────┘          │
-                        │                                        ▲         │
-                        ▼                                        │ s3://   │
-                  Postgres (decision log)        S3/SeaweedFS (MLflow artifacts)
-                                                                 ▲         │
-                    training Job/CronJob ──log runs──► MLflow ──┘          │
-                    (ml/training)                     (tracking + registry)│
-                    │                                                      │
-                    └──────────────────────────────────────────────────────┘
-                                   ▲
-                    GitHub Actions ─┘ build, test, push image, bump tag ─► Argo CD
-```
+![Architecture: simulator, payments API, KServe predictor, Postgres, drift monitor and retrain CronJob in namespace fraud; MLflow, SeaweedFS, the MLflow storage initializer, Prometheus and Grafana on the homelab platform; GitHub, the image registry and Argo CD for delivery](docs/architecture.svg)
 
-Full description: [docs/architecture.md](docs/architecture.md).
+Full description: [docs/architecture.md](docs/architecture.md). The diagram is
+`docs/architecture.svg`.
 
 ## Repository layout
 

@@ -201,10 +201,10 @@ the drill, traffic was reverted and v2 put back with the rollback runbook
 
 ## Phase 8: Polish for the portfolio
 
-- [ ] Architecture diagram image in `docs/`
+- [x] Architecture diagram image in `docs/` (`docs/architecture.svg`, in the README)
 - [ ] README walkthrough with screenshots (MLflow, Grafana, Argo CD)
-- [ ] Short demo script (`scripts/demo.sh`) that exercises the whole loop
-- [ ] Repo badges: CI status, license, Python version
+- [x] Short demo script (`scripts/demo.sh`): cluster tour or `local` compose loop
+- [x] Repo badges: CI status, license, Python version
 
 ## Ideas parked (not committed)
 
