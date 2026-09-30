@@ -21,9 +21,11 @@ spec:
           expr: |
             sum(rate(fraud_payments_total{decision!="approved"}[24h]))
               / clamp_min(sum(rate(fraud_payments_total[24h])), 1e-9)
+        # The fallback counter has no series until the first fallback, so
+        # default to 0 instead of "no data" while everything is healthy.
         - record: fraud:scorer_fallback:ratio_rate5m
           expr: |
-            sum(rate(fraud_scorer_fallback_total[5m]))
+            (sum(rate(fraud_scorer_fallback_total[5m])) or on() vector(0))
               / clamp_min(sum(rate(fraud_payments_total[5m])), 1e-9)
         - record: fraud:payments_post_latency_seconds:p99_5m
           expr: |
