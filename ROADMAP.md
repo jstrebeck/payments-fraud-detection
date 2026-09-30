@@ -5,7 +5,7 @@ and keep the "Current phase" pointer accurate. Items marked **(homelab)** are
 built in the `Homelab-Configuration` repo, and are listed here only so the
 dependency is visible.
 
-**Current phase:** 7 (Phase 5 waits only on the self-hosted runner; deploys are manual until then)
+**Current phase:** 8 (Phase 5 waits only on the self-hosted runner; deploys are manual until then)
 
 ## Phase 0: Scaffold and design
 
@@ -178,16 +178,26 @@ Decision thresholds now follow the champion's model card
 
 ## Phase 7: Feedback loop, drift and retraining
 
-- [ ] Delayed label feedback: simulator posts chargeback/confirmation for a
+- [x] Delayed label feedback: simulator posts chargeback/confirmation for a
       sample of past transactions; API stores labels
-- [ ] Drift job (Evidently or hand-rolled PSI) comparing live feature
+- [x] Drift job (Evidently or hand-rolled PSI) comparing live feature
       distributions to the training reference; exports Prometheus metrics
-- [ ] Scheduled retraining `CronJob` that pulls recent labelled decisions,
-      retrains, evaluates, and promotes only through the gate
-- [ ] Rollback runbook: repoint alias, Argo sync, verify
+- [x] Scheduled retraining `CronJob` that pulls recent labelled decisions,
+      retrains, evaluates, and promotes only through the gate (`retrain`,
+      every 30m, on drift or champion age, ADR-0015)
+- [x] Rollback runbook: repoint alias, roll the predictor (no Argo sync needed,
+      ADR-0006), verify; exercised in the drill (`docs/runbooks/rollback-model.md`)
 
 Done when: a deliberately drifted simulator run triggers the drift alert, a
 retrain runs, and the new champion is serving without manual intervention.
+**Met 2026-09-30:** `fraud-shift` traffic from 06:50 UTC (a Git commit);
+`FraudFeatureDrift` fired at 07:54; the `retrain` CronJob trained v6 at 10:00,
+the gate promoted it on held-out live cards (PR-AUC 0.42 -> 0.64), the Job
+rolled the predictor and the API switched to v6 and its own thresholds, with
+no manual step. The first attempt (08:00) was rejected, which exposed a flaw
+in the time-based split, fixed before the run that promoted (ADR-0015). After
+the drill, traffic was reverted and v2 put back with the rollback runbook
+(18 s). Known limitation: v6 partly forgot `card_testing`, see ADR-0015.
 
 ## Phase 8: Polish for the portfolio
 

@@ -75,3 +75,41 @@ retrained model serving in the cluster, and only if it is better. Choices:
   is over-represented in live rows. That helps the model learn new fraud but
   makes live-window precision look better than production; recall is
   unaffected.
+
+## Results (Phase 7 drill, 2026-09-30)
+
+The simulator was switched to the `fraud-shift` profile through Git at
+06:50 UTC. With no further manual step: `FraudFeatureDrift` fired at 07:54
+(amount, log_amount, channel_code, amount_sum_24h); the 08:00 CronJob
+retrained, and the gate rejected the challenger (the time-split flaw above);
+after the card-split fix, the 10:00 CronJob retrained v6, the gate promoted it
+(PR-AUC 0.42 -> 0.64 on held-out live cards, recall at 1% FPR 0.29 -> 0.33),
+the Job rolled the predictor, and the API switched to v6 and its thresholds
+(0.360 / 0.638).
+
+## Known limitation: forgetting what the live window does not show
+
+Measured afterwards on fresh generated traffic (2,000 customers, 30 days):
+
+| Traffic | Model | PR-AUC | card_testing recall | session_hijack recall |
+|---|---|---|---|---|
+| fraud-shift | v2 (old champion) | 0.31 | 0.71 | 0.01 |
+| fraud-shift | v6 (retrained) | 0.54 | 0.39 | 0.45 |
+| normal | v2 | 0.91 | 0.84 | n/a |
+| normal | v6 | 0.82 | 0.68 | n/a |
+
+v6 is the better model for the drifted world, but it partly forgot
+`card_testing`. The held-out live cards contained too few card-testing
+frauds for the gate to see that. Options, not yet implemented:
+
+- a larger generated history in retraining (the drill data showed 1,000 x 30
+  beats 500 x 14 and no history at all), or weighting live rows instead of
+  shrinking the history;
+- a second gate check on a generated benchmark with every known pattern:
+  reject a challenger whose per-pattern recall regresses beyond a margin
+  there, even if it wins on live traffic.
+
+Until then, when traffic returns to normal after a drift promotion, roll back
+with `docs/runbooks/rollback-model.md` (done at the end of the drill: v2 was
+serving again 18 seconds later).
+

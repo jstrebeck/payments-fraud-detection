@@ -74,3 +74,23 @@ investigate: `kubectl -n fraud patch cronjob retrain -p '{"spec":{"suspend":true
 
 Once the fix is trained and registered, promote it through the gate as usual
 (`make promote`); that moves `champion` and rolls the predictor in one step.
+
+## Drill (2026-09-30)
+
+Run at the end of the Phase 7 drill, to put back v2 after the automated
+retrain had promoted v6 for drifted traffic (ADR-0015) and the traffic had
+returned to normal:
+
+| Time (UTC) | Step |
+|---|---|
+| 10:05:13 | Preconditions: `champion` = 6, `previous` = 2 |
+| 10:05:14 | Step 1: `champion` -> 2 |
+| 10:05:18 | Step 2: `promote.py --rollout-only` patched the InferenceService |
+| 10:05:31 | New predictor pod's storage initializer: `"version": "2"`; API logs `model_version_changed` 6 -> 2 and decides with v2's thresholds |
+
+18 seconds end to end. The drill found a race in step 2: `kubectl rollout
+status` ran before KServe had copied the annotation into the Deployment and
+reported the old rollout as complete. `promote.py` now waits for the
+annotation first (the in-cluster path, `ml/evaluation/rollout.py`, already
+did).
+

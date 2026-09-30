@@ -46,6 +46,11 @@ def rollout(namespace: str, isvc: str, version: str) -> bool:
     steps = [
         ["kubectl", "-n", namespace, "patch", "inferenceservice", isvc,
          "--type", "merge", "-p", json.dumps(patch)],
+        # KServe copies the annotation into the Deployment asynchronously; until
+        # it has, `rollout status` reports the previous rollout as complete.
+        ["kubectl", "-n", namespace, "wait", f"deployment/{isvc}-predictor",
+         f"--for=jsonpath={{.spec.template.metadata.annotations.fraud-detection/model-version}}={version}",
+         "--timeout=2m"],
         ["kubectl", "-n", namespace, "rollout", "status",
          f"deployment/{isvc}-predictor", "--timeout=5m"],
         ["kubectl", "-n", namespace, "wait", f"inferenceservice/{isvc}",

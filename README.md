@@ -8,7 +8,7 @@ transaction for fraud in real time, with the full lifecycle of the model
 running on a self-hosted Kubernetes homelab.
 
 **Author:** Josh Strebeck ([@jstrebeck](https://github.com/jstrebeck))
-**Status:** Phases 0 to 6 in place. The API runs in the homelab and scores every payment with the `champion` model served by KServe, deployed by Argo CD from `deploy/overlays/homelab`, with Grafana dashboards, alerts and end-to-end correlation IDs. Next: Phase 7, feedback loop and retraining. See [ROADMAP.md](ROADMAP.md).
+**Status:** Phases 0 to 7 in place. The API runs in the homelab and scores every payment with the `champion` model served by KServe, deployed by Argo CD from `deploy/overlays/homelab`, with dashboards, alerts, correlation IDs, delayed label feedback, drift detection, and alert-driven retraining that promotes only through the evaluation gate. Next: Phase 8, portfolio polish. See [ROADMAP.md](ROADMAP.md).
 **Note:** the self-hosted GitHub Actions runner is offline for now, so the image build/push and cluster-training workflows are skipped and deploys are run by hand (`make release`, `make train-cluster`). Details in [docs/ci-cd.md](docs/ci-cd.md).
 **License:** [MIT](LICENSE)
 
