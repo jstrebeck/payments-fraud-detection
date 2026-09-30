@@ -1,0 +1,105 @@
+# payments-api: scores every payment via the fraud-detector InferenceService
+# (KServeScorer), falling back to rules, and records the decision in Postgres.
+# Schema migrations run in an init container before the API starts.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-api
+  labels:
+    app.kubernetes.io/name: payments-api
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payments-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: payments-api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: migrate
+          image: 192.168.2.203:5000/fraud/payments-api
+          command: ["payments-api-migrate"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: payments-db
+                  key: DATABASE_URL
+          securityContext: &hardened
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: payments-api
+          image: 192.168.2.203:5000/fraud/payments-api
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: payments-db
+                  key: DATABASE_URL
+            - name: FRAUD_SCORER
+              value: kserve
+            - name: KSERVE_URL
+              value: http://fraud-detector-predictor.fraud.svc/v2/models/fraud-detector/infer
+            - name: KSERVE_TIMEOUT_SECONDS
+              value: "0.3"
+            # Registry lookups for the feature_version handshake (ADR-0013).
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow.mlops.svc
+            - name: MODEL_NAME
+              value: fraud-detector
+            - name: LOG_FORMAT
+              value: json
+          securityContext: *hardened
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

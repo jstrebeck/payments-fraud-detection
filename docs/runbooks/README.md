@@ -8,7 +8,7 @@ Planned (create as the corresponding phase lands):
 
 | Runbook | Phase | Trigger |
 |---|---|---|
-| `rollback-model.md` | 4 | Bad model in production; repoint `champion`, restart predictor, verify version metric |
+| [`rollback-model.md`](rollback-model.md) | 4 | Bad model in production; repoint `champion`, `promote.py --rollout-only`, verify version metric |
 | `rollback-api.md` | 5 | Bad API release; revert tag-bump commit, Argo sync |
 | `scorer-fallback-firing.md` | 6 | `fraud_scorer_fallback_total` alert; check InferenceService, storage initializer, S3 store |
 | `manual-training-run.md` | 5 | Run training outside the schedule; dispatch workflow or apply Job |

@@ -1,9 +1,12 @@
 # fraud-detector served by KServe (Standard/RawDeployment mode, ADR-0005).
 # Reached in-cluster at
 #   http://fraud-detector-predictor.fraud.svc/v2/models/fraud-detector/infer
-# storageUri is the champion's artifact location in SeaweedFS: MLflow proxies
-# mlflow-artifacts:/<path> to s3://mlflow-artifacts/<path>. Hand-set for now
-# (fraud-detector v2 = m-6b6c7e5f...); Phase 4 derives it from the alias.
+# storageUri names the registry alias, not a version (ADR-0006). The homelab's
+# `mlflow` ClusterStorageContainer resolves it when a predictor pod starts,
+# downloads through the MLflow artifact proxy (no S3 credentials) and writes a
+# model-settings.json so every V2 response carries `model_version`. Promotion
+# or rollback = move the alias, then restart the predictor
+# (scripts/promote.py does both; docs/runbooks/rollback-model.md).
 apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
 metadata:
@@ -11,7 +14,6 @@ metadata:
   namespace: fraud
 spec:
   predictor:
-    serviceAccountName: kserve-sa
     minReplicas: 1
     maxReplicas: 2
     model:
@@ -20,7 +22,7 @@ spec:
       modelFormat:
         name: mlflow
         version: "3"
-      storageUri: s3://mlflow-artifacts/4/models/m-6b6c7e5fa7e746d69809cfeb9c43b729/artifacts
+      storageUri: models:/fraud-detector@champion
       resources:
         requests:
           cpu: 100m

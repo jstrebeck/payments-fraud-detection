@@ -32,8 +32,11 @@ deliberately thin; the interesting part is the machinery around the model.
    Postgres (last 7 days, at most 100 rows; ADR-0010), and calls
    `ml.features.build_features`.
 3. API calls the `FraudScorer`. In the cluster this is `KServeScorer`, which
-   POSTs to the `InferenceService` V2 endpoint with a timeout. On timeout or
-   error it falls back to `RuleScorer` and increments a fallback counter.
+   POSTs to the `InferenceService` V2 endpoint with a 300 ms timeout. The
+   response names the registry version that scored it; the first time a
+   version appears, its `feature_version` tag is checked against the API's
+   (ADR-0013). On timeout, error or an incompatible version it falls back to
+   `RuleScorer` and increments `fraud_scorer_fallback_total{reason}`.
 4. Decision policy maps score to `approved | review | declined` using
    thresholds held in config (so they can be tuned without a retrain).
 5. Decision, score, model version and features are written to Postgres.
@@ -89,8 +92,8 @@ deliberately thin; the interesting part is the machinery around the model.
 | `fraud_payments_total{decision}` | counter | Decision mix; sudden change means model or traffic changed |
 | `fraud_score` | histogram | Score distribution; drift signal without labels |
 | `fraud_scorer_latency_seconds{scorer}` | histogram | Model latency budget |
-| `fraud_scorer_fallback_total{reason}` | counter | Serving health |
-| `fraud_model_version_info{version}` | gauge | Which version is live |
+| `fraud_scorer_fallback_total{reason}` | counter | Serving health; `reason` is the error class (`KServeTimeoutError`, `KServeHTTPError`, `IncompatibleModelError`, ...) |
+| `fraud_model_version_info{scorer,version}` | gauge | Which version is live (for KServe: the last version seen in a verified response) |
 | `fraud_payments_replayed_total` | counter | Idempotent replays of an already-scored transaction |
 | `fraud_http_requests_total{method,route,status}`, `fraud_http_request_duration_seconds` | counter, histogram | RED metrics for every route |
 | `fraud_sim_decisions_total{decision,truth}` | counter | Simulator side: live confusion counts against ground truth |

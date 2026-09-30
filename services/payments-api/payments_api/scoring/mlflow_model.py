@@ -24,16 +24,9 @@ from mlflow import MlflowClient
 from ml.features import FEATURE_NAMES, FEATURE_VERSION
 from payments_api import metrics
 from payments_api.scoring.base import ScoreResult
+from payments_api.scoring.errors import IncompatibleModelError, ModelUnavailableError
 
 log = structlog.get_logger(__name__)
-
-
-class ModelUnavailableError(RuntimeError):
-    """No compatible model is loaded; the caller falls back to rules."""
-
-
-class IncompatibleModelError(RuntimeError):
-    """The aliased model was trained on a different feature version."""
 
 
 @dataclass(frozen=True, slots=True)

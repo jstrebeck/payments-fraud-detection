@@ -102,13 +102,16 @@ hand-applied `InferenceService` serves the `champion` model.
 
 ## Phase 4: Serve on KServe and wire the API
 
-- [ ] `deploy/base`: `InferenceService` (`modelFormat: mlflow`, storageUri
-      from the registry), payments-api `Deployment`/`Service`, Postgres
-      connection secret reference, `ServiceMonitor`s
+- [ ] `deploy/base`: `InferenceService` (`modelFormat: mlflow`,
+      `storageUri: models:/fraud-detector@champion`, resolved at pod start by
+      the homelab's MLflow storage initializer, ADR-0006), payments-api
+      `Deployment`/`Service`, Postgres connection secret reference,
+      `ServiceMonitor`s
 - [ ] `KServeScorer` in the API using the V2 inference protocol; timeout and
       fallback to `RuleScorer` with a metric when the model is unavailable
-- [ ] `ml/serving`: custom transformer only if feature computation cannot be
-      packaged inside the MLflow pyfunc. Prefer packaging it.
+- [ ] `ml/serving`: no transformer. Features are computed by the API and the
+      model takes the feature vector (ADR-0013); `ml/serving` holds only the
+      custom runtime image (ADR-0014)
 - [ ] Simulator runs in-cluster as a `Deployment` with a low steady rate
 - [ ] Smoke test script hitting the in-cluster API
 

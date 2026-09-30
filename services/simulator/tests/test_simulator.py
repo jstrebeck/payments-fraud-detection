@@ -11,7 +11,7 @@ import pytest
 from ml.data.generator import GeneratorConfig, generate
 from ml.data.io import iter_transactions
 from ml.data.schema import LabelledTransaction
-from simulator.cli import parse_duration
+from simulator.cli import parse_duration, parse_seed, stream
 from simulator.runner import RunConfig, RunStats, run, shard
 
 
@@ -110,3 +110,30 @@ def test_parse_duration(text: str, seconds: float) -> None:
 def test_parse_duration_rejects_garbage() -> None:
     with pytest.raises(argparse.ArgumentTypeError):
         parse_duration("ten minutes")
+
+
+SMALL = GeneratorConfig(seed=11, customers=20, days=2, fraud_rate=0.05)
+
+
+def test_stream_without_loop_is_one_deterministic_pass() -> None:
+    once = [t.transaction_id for t in stream(SMALL, loop=False)]
+    again = [t.transaction_id for t in stream(SMALL, loop=False)]
+    assert once == again == [t.transaction_id for t in iter_transactions(generate(SMALL))]
+
+
+def test_loop_continues_with_fresh_seeds() -> None:
+    n = len(list(stream(SMALL, loop=False)))
+    looped = list(islice(stream(SMALL, loop=True), 3 * n))
+    ids = [t.transaction_id for t in looped]
+    assert len(ids) == 3 * n
+    assert len(set(ids)) == len(ids)  # no replays: every pass has new transaction IDs
+    next_pass = GeneratorConfig(**{**SMALL.__dict__, "seed": SMALL.seed + 1})
+    assert ids[n : 2 * n] == [t.transaction_id for t in iter_transactions(generate(next_pass))]
+
+
+def test_parse_seed(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert parse_seed("7") == 7
+    monkeypatch.setattr("simulator.cli.time.time", lambda: 1_790_000_000.9)
+    assert parse_seed("auto") == 1_790_000_000
+    with pytest.raises(argparse.ArgumentTypeError):
+        parse_seed("lucky")

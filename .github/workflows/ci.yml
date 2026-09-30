@@ -52,6 +52,15 @@ jobs:
           path: coverage.xml
           if-no-files-found: error
 
+  manifests:
+    name: manifests render
+    # deploy/README.md: `kustomize build deploy/overlays/homelab` must succeed
+    # with no cluster access. ubuntu-latest ships kubectl (built-in kustomize).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: make manifests
+
   images:
     name: images build
     # Proves the Dockerfiles and compose file stay valid. Nothing is pushed.

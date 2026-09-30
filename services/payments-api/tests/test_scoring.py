@@ -61,9 +61,19 @@ def test_rule_scorer_caps_at_one() -> None:
     assert asyncio.run(RuleScorer().score(f)).score == 1.0
 
 
-def test_unimplemented_scorers_fail_fast() -> None:
-    with pytest.raises(NotImplementedError, match="Phase 4"):
-        build_scorer(Settings(fraud_scorer="kserve", _env_file=None))
+def test_kserve_scorer_is_built_from_settings() -> None:
+    from payments_api.scoring.kserve import KServeScorer
+
+    settings = Settings(
+        fraud_scorer="kserve", kserve_url="http://p/v2/models/m/infer", _env_file=None
+    )
+    scorer = build_scorer(settings)
+    assert isinstance(scorer, KServeScorer)
+    assert (scorer.url, scorer.ready_url) == (
+        "http://p/v2/models/m/infer",
+        "http://p/v2/models/m/ready",
+    )
+    assert scorer.timeout_s == settings.kserve_timeout_seconds
 
 
 class BrokenScorer:

@@ -1,0 +1,74 @@
+# Steady synthetic traffic against the in-cluster API. `--seed auto` derives the
+# seed from the clock, so a restarted pod sends new transaction IDs instead of
+# replaying stored decisions; `--loop` moves to seed+1 when a pass ends
+# (~11k transactions, about two hours at 1.5 rps).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simulator
+  labels:
+    app.kubernetes.io/name: simulator
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: simulator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: simulator
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: simulator
+          image: 192.168.2.203:5000/fraud/simulator
+          args:
+            - run
+            - --api=http://payments-api.fraud.svc:8000
+            - --seed=auto
+            - --loop
+            - --rps=1.5
+            - --concurrency=4
+            - --customers=500
+            - --days=14
+            - --metrics-port=9100
+          ports:
+            - name: metrics
+              containerPort: 9100
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            periodSeconds: 10
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

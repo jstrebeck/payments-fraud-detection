@@ -6,7 +6,9 @@ import argparse
 import asyncio
 import os
 import re
-from collections.abc import Sequence
+import time
+from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import httpx2 as httpx
@@ -15,6 +17,7 @@ from prometheus_client import start_http_server
 
 from ml.data.generator import GeneratorConfig, generate
 from ml.data.io import iter_transactions
+from ml.data.schema import LabelledTransaction
 from simulator.runner import RunConfig, run
 
 log = structlog.get_logger(__name__)
@@ -36,12 +39,45 @@ def _parse_start(value: str) -> datetime:
     return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
 
 
+def parse_seed(value: str) -> int:
+    """An integer, or `auto` for one derived from the clock (fresh IDs on every start)."""
+    if value == "auto":
+        return int(time.time())
+    try:
+        return int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"invalid seed {value!r}; use an integer or 'auto'"
+        ) from None
+
+
+def stream(config: GeneratorConfig, *, loop: bool) -> Iterator[LabelledTransaction]:
+    """Transactions for `config.seed`; with `loop`, then seed+1, seed+2, ... forever.
+
+    Each pass is generated only when the previous one is exhausted, and each is
+    deterministic for its seed. A new seed means new transaction IDs and cards,
+    so the API scores fresh traffic instead of replaying stored decisions.
+    """
+    while True:
+        table = generate(config)
+        log.info("generated", transactions=table.num_rows, **config.metadata())
+        yield from iter_transactions(table)
+        if not loop:
+            return
+        config = replace(config, seed=config.seed + 1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="simulator", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     r = sub.add_parser("run", help="replay generated transactions against the API")
     r.add_argument("--api", default=os.environ.get("SIMULATOR_API_URL", "http://localhost:8000"))
-    r.add_argument("--seed", type=int, default=42)
+    r.add_argument(
+        "--seed", type=parse_seed, default=42, help="integer, or 'auto' (from the clock)"
+    )
+    r.add_argument(
+        "--loop", action="store_true", help="after the stream ends, continue with seed+1 (forever)"
+    )
     r.add_argument("--customers", type=int, default=500)
     r.add_argument("--days", type=int, default=14)
     r.add_argument("--fraud-rate", type=float, default=0.02)
@@ -63,8 +99,6 @@ async def _main(args: argparse.Namespace) -> int:
         fraud_rate=args.fraud_rate,
         start=args.start,
     )
-    table = generate(gen)
-    log.info("generated", transactions=table.num_rows, **gen.metadata())
     if args.metrics_port:
         start_http_server(args.metrics_port)
 
@@ -72,7 +106,7 @@ async def _main(args: argparse.Namespace) -> int:
         rps=args.rps, concurrency=args.concurrency, duration_s=args.duration, limit=args.limit
     )
     async with httpx.AsyncClient(base_url=args.api, timeout=args.timeout) as client:
-        stats = await run(iter_transactions(table), client, config)
+        stats = await run(stream(gen, loop=args.loop), client, config)
     print(stats.summary())
     return 1 if stats.sent == 0 else 0
 

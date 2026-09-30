@@ -11,7 +11,7 @@ new ADR that supersedes the old one and link both ways. Copy
 | [0003](0003-synthetic-data.md) | Synthetic, seeded data instead of a public dataset | Accepted |
 | [0004](0004-mlflow-tracking-and-registry.md) | MLflow for tracking and registry, alias-based promotion | Accepted (model format superseded by 0013) |
 | [0005](0005-kserve-rawdeployment.md) | KServe in RawDeployment mode, MLflow runtime, V2 protocol | Accepted (runtime image superseded by 0014) |
-| [0006](0006-model-promotion-mechanism.md) | How a promoted model reaches the InferenceService | Proposed (decide in Phase 4) |
+| [0006](0006-model-promotion-mechanism.md) | How a promoted model reaches the InferenceService | Accepted: `models:/` alias resolved at pod start, `promote.py` rolls the predictor |
 | [0007](0007-orchestration-kubernetes-jobs.md) | Kubernetes Jobs/CronJobs before any workflow engine | Accepted |
 | [0008](0008-gitops-argocd.md) | Argo CD for delivery | Accepted |
 | [0009](0009-python-tooling.md) | uv workspace, ruff, mypy, pytest, Python 3.12 | Accepted |

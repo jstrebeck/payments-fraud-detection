@@ -1,0 +1,11 @@
+# What Argo CD syncs from Phase 5 (ADR-0008). Image tags are git SHAs, never
+# `latest`; until Phase 5's CI bumps them, set them to what `make push` built.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+images:
+  - name: 192.168.2.203:5000/fraud/payments-api
+    newTag: 840f529
+  - name: 192.168.2.203:5000/fraud/simulator
+    newTag: 840f529

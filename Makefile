@@ -24,7 +24,7 @@ export MLFLOW_TRACKING_URI
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .PHONY: help install lint fmt typecheck test check dev dev-mlflow down clean-dev logs psql \
-        generate train promote simulate api build push smoke serving-image
+        generate train promote simulate api build push smoke smoke-cluster serving-image manifests
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -102,6 +102,15 @@ api: ## Run the API on the host with hot reload (after `make dev`; stop the comp
 
 smoke: ## /healthz, /readyz and one POST /payments against API_URL
 	scripts/smoke.sh $(API_URL)
+
+smoke-cluster: ## Smoke test the in-cluster API via port-forward; requires a KServe score
+	scripts/smoke-cluster.sh
+
+## --- Kubernetes -------------------------------------------------------------
+
+manifests: ## Render deploy/overlays/homelab (what Argo CD will sync); no cluster needed
+	kubectl kustomize deploy/overlays/homelab > /dev/null
+	@echo "deploy/overlays/homelab renders"
 
 ## --- Images -----------------------------------------------------------------
 

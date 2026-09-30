@@ -1,0 +1,16 @@
+# This project's workloads in namespace `fraud`. The namespace itself, the
+# Secrets (payments-db, s3-credentials) and the platform (KServe, MLflow,
+# Postgres) come from the homelab repo (ADR-0002).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: fraud
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: payments-fraud-detection
+    includeSelectors: false
+resources:
+  - payments-api
+  - simulator
+  - serving-runtime.yaml
+  - inferenceservice.yaml
+  - podmonitor-fraud-detector.yaml

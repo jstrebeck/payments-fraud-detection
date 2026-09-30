@@ -1,0 +1,16 @@
+# kube-prometheus-stack only selects ServiceMonitors carrying this release label.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: payments-api
+  labels:
+    app.kubernetes.io/name: payments-api
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payments-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

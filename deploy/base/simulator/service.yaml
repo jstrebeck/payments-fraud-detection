@@ -1,0 +1,14 @@
+# Metrics only; nothing calls the simulator.
+apiVersion: v1
+kind: Service
+metadata:
+  name: simulator
+  labels:
+    app.kubernetes.io/name: simulator
+spec:
+  selector:
+    app.kubernetes.io/name: simulator
+  ports:
+    - name: metrics
+      port: 9100
+      targetPort: metrics

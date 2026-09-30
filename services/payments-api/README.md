@@ -22,9 +22,11 @@ Every response carries `x-request-id` (taken from the request if present).
 | Variable | Default | |
 |---|---|---|
 | `DATABASE_URL` | `postgresql+asyncpg://fraud:fraud@localhost:5432/payments` | In the cluster, from Secret `payments-db` |
-| `FRAUD_SCORER` | `rule` | `rule`, `mlflow` (compose default), `kserve` (Phase 4; fails fast until then) |
+| `FRAUD_SCORER` | `rule` | `rule`, `mlflow` (compose default), `kserve` (cluster) |
 | `REVIEW_THRESHOLD` / `DECLINE_THRESHOLD` | `0.5` / `0.8` | Decision policy for every scorer; the model card recommends model-specific values |
-| `MLFLOW_TRACKING_URI` | MLflow default | `MlflowScorer` registry |
+| `KSERVE_URL` | `http://fraud-detector-predictor.fraud.svc/v2/models/fraud-detector/infer` | `KServeScorer` V2 endpoint; `/ready` is derived from it |
+| `KSERVE_TIMEOUT_SECONDS` | `0.3` | Whole predictor request budget; past it the payment is scored by rules |
+| `MLFLOW_TRACKING_URI` | MLflow default | `MlflowScorer` registry; `KServeScorer` feature-version lookups |
 | `MODEL_NAME` / `MODEL_ALIAS` | `fraud-detector` / `champion` | |
 | `MODEL_REFRESH_SECONDS` | `60` | How often to check whether the alias moved; `0` disables hot reload |
 | `REQUIRE_SCORER` | `false` | Fail readiness while rules are standing in |
@@ -44,7 +46,9 @@ payments_api/
   scoring/
     base.py        FraudScorer protocol, ScoreResult
     rule.py        RuleScorer: additive red flags; baseline and permanent fallback
+    errors.py      ModelUnavailableError, IncompatibleModelError (names are fallback `reason` labels)
     mlflow_model.py MlflowScorer: `MODEL_NAME@MODEL_ALIAS` in-process, feature_version check, hot reload
+    kserve.py      KServeScorer: V2 call to the InferenceService, feature_version check per served version
   metrics.py       prometheus-client objects
   config.py        pydantic-settings
   logs.py          structlog (JSON or console)
@@ -61,7 +65,7 @@ Dockerfile
 |---|---|---|
 | `RuleScorer` | always available; the fallback | `rules-v1` |
 | `MlflowScorer` | compose and local (Phase 2) | `fraud-detector/<n>` |
-| `KServeScorer` | cluster (Phase 4) | from the InferenceService |
+| `KServeScorer` | cluster | `fraud-detector/<n>`, from the V2 response's `model_version` |
 
 `MlflowScorer` loads the aliased version at startup and polls the alias every
 `MODEL_REFRESH_SECONDS`; a promotion goes live without a restart and shows
@@ -69,6 +73,20 @@ up in `fraud_model_version_info`. It refuses versions whose `feature_version`
 tag differs from this build's `ml.features.FEATURE_VERSION` (ADR-0013). While
 no compatible model is loaded, requests are scored by rules and counted in
 `fraud_scorer_fallback_total{reason="ModelUnavailableError"}`.
+
+`KServeScorer` sends the feature vector as one named `FP64` input per
+feature and reads the fraud probability from column 1 of `predict_proba`.
+The storage initializer that resolved `models:/fraud-detector@champion`
+tells MLServer the registry version (ADR-0006), so every response says which
+version scored it. The first time a version is seen, its `feature_version`
+tag is read from MLflow (bounded to 2 s, shared by concurrent requests) and
+compared with this build's; a mismatch or a missing version is refused and
+remembered. Lookup failures are not cached. A promotion therefore needs no
+API change: the predictor restarts, the new version appears in responses,
+and `fraud_model_version_info` follows. Failures map to fallback reasons
+`KServeTimeoutError`, `KServeHTTPError` (unreachable or non-2xx),
+`KServeResponseError`, `IncompatibleModelError` and `ModelVersionCheckError`.
+`/readyz` reports `fallback` while the predictor's `/ready` does not answer 200.
 
 ## Rules
 

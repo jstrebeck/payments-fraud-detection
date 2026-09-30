@@ -8,6 +8,11 @@ runs it in compose); in the cluster a `Deployment` with a low steady rate
 
 - Generates a stream with `ml.data.generate` for a seed and fraud rate, then
   replays it in time order at a target rate (`--rps`, 0 = unlimited).
+- `--seed auto` takes the seed from the clock; `--loop` continues with
+  seed+1, seed+2, ... when a pass ends. Each pass is deterministic for its
+  seed (and logged), but new seeds mean new transaction IDs and cards, so a
+  long-running or restarted simulator keeps producing fresh scoring work
+  instead of idempotent replays. The in-cluster `Deployment` uses both.
 - Label fields are stripped before sending; ground truth stays in the
   simulator.
 - Each card's transactions go through one worker, in order (hashed by card
@@ -26,6 +31,7 @@ runs it in compose); in the cluster a `Deployment` with a low steady rate
 ```
 uv run simulator run --api http://localhost:8000 --seed 42 --rps 20 --duration 10m
 uv run simulator run --customers 2000 --days 30 --fraud-rate 0.03 --rps 0 --limit 5000
+uv run simulator run --seed auto --loop --rps 1.5 --metrics-port 9100   # what the cluster runs
 make simulate SIM_ARGS="--rps 50 --duration 2m"      # in compose, against the compose API
 ```
 
