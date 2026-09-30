@@ -48,7 +48,7 @@ spec:
             # Traffic profile (ml/data/drift.py). To exercise drift detection and
             # retraining, change to fraud-shift in a commit and revert it after
             # (services/simulator/README.md, "Drifted traffic").
-            - --drift=none
+            - --drift=fraud-shift
           ports:
             - name: metrics
               containerPort: 9100
