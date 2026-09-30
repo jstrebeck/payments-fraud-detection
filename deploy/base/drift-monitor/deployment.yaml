@@ -1,0 +1,81 @@
+# PSI of live feature vectors (last hour of payments) against the champion's
+# training profile, exported for Prometheus (ml/evaluation/drift_monitor.py).
+# Runs from the trainer image; reads the payments DB with the API's credentials.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drift-monitor
+  labels:
+    app.kubernetes.io/name: drift-monitor
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: drift-monitor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: drift-monitor
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: drift-monitor
+          image: 192.168.2.203:5000/fraud/trainer
+          command:
+            - python
+            - -m
+            - ml.evaluation.drift_monitor
+            - --port=9102
+            - --interval=5m
+            - --window=1h
+            - --min-rows=300
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: payments-db
+                  key: DATABASE_URL
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow.mlops.svc
+            - name: MODEL_NAME
+              value: fraud-detector
+          ports:
+            - name: metrics
+              containerPort: 9102
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: metrics
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

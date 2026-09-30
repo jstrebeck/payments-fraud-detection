@@ -1,0 +1,16 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: drift-monitor
+  labels:
+    app.kubernetes.io/name: drift-monitor
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: drift-monitor
+  endpoints:
+    - port: metrics
+      path: /metrics
+      # PSI is recomputed every 5 minutes; scraping faster adds nothing.
+      interval: 60s

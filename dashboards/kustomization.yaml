@@ -21,3 +21,6 @@ configMapGenerator:
   - name: grafana-dashboard-fraud-training
     files:
       - training.json
+  - name: grafana-dashboard-fraud-drift
+    files:
+      - drift.json

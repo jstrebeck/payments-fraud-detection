@@ -13,8 +13,9 @@ from mlflow import MlflowClient
 
 from ml.data.generator import GeneratorConfig, generate
 from ml.data.io import write_parquet
+from ml.evaluation.drift import PROFILE_ARTIFACT, Profile
 from ml.evaluation.promote import CARD, CHAMPION, GATE, PREVIOUS, run_gate
-from ml.features import FEATURE_VERSION
+from ml.features import FEATURE_NAMES, FEATURE_VERSION
 from ml.training import train as train_module
 from ml.training.config import TrainConfig, TrainSettings
 from ml.training.train import TrainResult, train
@@ -83,6 +84,13 @@ def test_run_has_report_card_and_gate(first: TrainResult, tmp_path: Path) -> Non
         Path(client.download_artifacts(first.run_id, GATE, str(tmp_path))).read_text()
     )
     assert gate["promote"] is True
+
+
+def test_run_logs_the_drift_reference_profile(first: TrainResult, tmp_path: Path) -> None:
+    local = MlflowClient().download_artifacts(first.run_id, PROFILE_ARTIFACT, str(tmp_path))
+    profile = Profile.from_dict(json.loads(Path(local).read_text()))
+    assert set(profile.features) == set(FEATURE_NAMES)
+    assert profile.n > 0
 
 
 def test_registered_model_scores_probabilities(first: TrainResult, registry: Path) -> None:
