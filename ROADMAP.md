@@ -5,7 +5,7 @@ and keep the "Current phase" pointer accurate. Items marked **(homelab)** are
 built in the `Homelab-Configuration` repo, and are listed here only so the
 dependency is visible.
 
-**Current phase:** 4
+**Current phase:** 5
 
 ## Phase 0: Scaffold and design
 
@@ -102,21 +102,25 @@ hand-applied `InferenceService` serves the `champion` model.
 
 ## Phase 4: Serve on KServe and wire the API
 
-- [ ] `deploy/base`: `InferenceService` (`modelFormat: mlflow`,
+- [x] `deploy/base`: `InferenceService` (`modelFormat: mlflow`,
       `storageUri: models:/fraud-detector@champion`, resolved at pod start by
       the homelab's MLflow storage initializer, ADR-0006), payments-api
       `Deployment`/`Service`, Postgres connection secret reference,
       `ServiceMonitor`s
-- [ ] `KServeScorer` in the API using the V2 inference protocol; timeout and
+- [x] `KServeScorer` in the API using the V2 inference protocol; timeout and
       fallback to `RuleScorer` with a metric when the model is unavailable
-- [ ] `ml/serving`: no transformer. Features are computed by the API and the
+- [x] `ml/serving`: no transformer. Features are computed by the API and the
       model takes the feature vector (ADR-0013); `ml/serving` holds only the
       custom runtime image (ADR-0014)
-- [ ] Simulator runs in-cluster as a `Deployment` with a low steady rate
-- [ ] Smoke test script hitting the in-cluster API
+- [x] Simulator runs in-cluster as a `Deployment` with a low steady rate
+- [x] Smoke test script hitting the in-cluster API
 
 Done when: transactions scored in the cluster by the KServe model, decisions
 in Postgres, latency and score histograms in Prometheus.
+**Met 2026-09-30:** the in-cluster simulator's payments are scored by
+`kserve` with `fraud-detector/2` and stored in `payments-postgres`; Prometheus
+scrapes payments-api, simulator and the predictor, with scorer latency p50
+17 ms / p99 25 ms and `fraud_score` populated. `make smoke-cluster` passes.
 
 ## Phase 5: CI/CD and GitOps
 
