@@ -20,3 +20,4 @@ new ADR that supersedes the old one and link both ways. Copy
 | [0012](0012-shared-homelab-mlflow.md) | Development uses the homelab MLflow; local MLflow behind a compose profile | Accepted |
 | [0013](0013-model-input-is-the-feature-vector.md) | The model's input is the feature vector; `feature_version` handshake | Accepted (serving runtime superseded by 0014) |
 | [0014](0014-custom-serving-runtime.md) | Custom MLServer image as the KServe serving runtime | Accepted |
+| [0015](0015-automated-retraining.md) | Alert-driven retraining on labelled live decisions; thresholds travel with the model | Accepted |

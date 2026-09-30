@@ -12,6 +12,10 @@ class ScoreResult:
     score: float  # probability-like, 0..1
     scorer: str
     model_version: str
+    # Decision thresholds that belong to the model that produced the score (its
+    # model card's recommendation). None: use the API's configured policy.
+    review_threshold: float | None = None
+    decline_threshold: float | None = None
 
 
 class FraudScorer(Protocol):

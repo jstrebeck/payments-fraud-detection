@@ -1,0 +1,78 @@
+# Automated retraining (Phase 7, ml/training/retrain.py). Every 30 minutes it
+# checks whether to retrain: FraudFeatureDrift firing in Prometheus, or the
+# champion older than 7 days, with a 6h cooldown between retrains. When it
+# retrains it uses generated history plus labelled live payments, gates the
+# challenger on the most recent live labels, and on a win moves `champion` and
+# rolls the predictor. Most runs exit in seconds with "no drift".
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: retrain
+  labels:
+    app.kubernetes.io/name: retrain
+spec:
+  schedule: "*/30 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: retrain
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 3600
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: retrain
+        spec:
+          serviceAccountName: retrainer
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: retrain
+              image: 192.168.2.203:5000/fraud/trainer
+              command: ["python", "-m", "ml.training.retrain"]
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: payments-db
+                      key: DATABASE_URL
+                - name: MLFLOW_TRACKING_URI
+                  value: http://mlflow.mlops.svc
+                # Cluster runs are the record (ADR-0012).
+                - name: MLFLOW_EXPERIMENT_NAME
+                  value: fraud-detector
+                - name: MODEL_NAME
+                  value: fraud-detector
+                - name: PROMETHEUS_URL
+                  value: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: 1Gi
+                limits:
+                  cpu: "2"
+                  memory: 3Gi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}

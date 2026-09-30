@@ -66,18 +66,25 @@ class FakePredictor:
 
 
 class FakeRegistry:
-    """feature_version tag per registry version; counts lookups; can fail."""
+    """Tags per registry version (feature_version, optional extras); counts lookups; can fail."""
 
-    def __init__(self, tags: dict[str, str | None]) -> None:
-        self.tags = tags
+    def __init__(
+        self,
+        feature_versions: dict[str, str | None],
+        extra: dict[str, dict[str, str]] | None = None,
+    ) -> None:
+        self.feature_versions = feature_versions
+        self.extra = extra or {}
         self.calls: list[str] = []
         self.fail = False
 
-    def __call__(self, version: str) -> str | None:
+    def __call__(self, version: str) -> dict[str, str]:
         self.calls.append(version)
         if self.fail:
             raise ConnectionError("mlflow down")
-        return self.tags[version]
+        fv = self.feature_versions[version]
+        base = {"feature_version": fv} if fv is not None else {}
+        return base | self.extra.get(version, {})
 
 
 def _scorer(predictor: FakePredictor, registry: FakeRegistry) -> KServeScorer:
@@ -335,3 +342,30 @@ def test_api_logs_carry_the_request_id_on_fallback(
     events = {e["event"]: e for e in logs}
     for name in ("scorer_failed_using_fallback", "payment_scored", "request"):
         assert events[name]["request_id"] == "rid-7", name
+
+
+def test_version_thresholds_come_from_its_tags() -> None:
+    registry = FakeRegistry(
+        {"2": FEATURE_VERSION, "3": FEATURE_VERSION},
+        extra={
+            "3": {
+                "recommended_review_threshold": "0.02",
+                "recommended_decline_threshold": "0.14",
+            }
+        },
+    )
+    (untagged,) = _score(_scorer(FakePredictor(version="2"), registry))
+    (tagged,) = _score(_scorer(FakePredictor(version="3"), registry))
+
+    assert (untagged.review_threshold, untagged.decline_threshold) == (None, None)
+    assert (tagged.review_threshold, tagged.decline_threshold) == (0.02, 0.14)
+
+
+@pytest.mark.parametrize(
+    ("review", "decline"), [("0.5", "0.2"), ("0", "0.1"), ("x", "0.1"), ("0.1", "1.5")]
+)
+def test_nonsense_thresholds_are_ignored(review: str, decline: str) -> None:
+    tags = {"recommended_review_threshold": review, "recommended_decline_threshold": decline}
+    registry = FakeRegistry({"3": FEATURE_VERSION}, extra={"3": tags})
+    (result,) = _score(_scorer(FakePredictor(version="3"), registry))
+    assert result.review_threshold is None

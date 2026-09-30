@@ -1,0 +1,33 @@
+# What the retraining Job may do in namespace fraud: roll the predictor after a
+# promotion (patch the InferenceService's pod annotation, watch the Deployment
+# KServe manages). Nothing else. ml/evaluation/rollout.py.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: retrainer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: retrainer
+rules:
+  - apiGroups: ["serving.kserve.io"]
+    resources: ["inferenceservices"]
+    resourceNames: ["fraud-detector"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["fraud-detector-predictor"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: retrainer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: retrainer
+subjects:
+  - kind: ServiceAccount
+    name: retrainer

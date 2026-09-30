@@ -29,8 +29,11 @@ from payments_api.scoring.errors import IncompatibleModelError
 
 log = structlog.get_logger(__name__)
 
-# Returns the `feature_version` tag of a registry version (None if untagged). Blocking.
-FeatureVersionLookup = Callable[[str], str | None]
+# Returns the tags of a registry version (feature_version, recommended thresholds). Blocking.
+VersionTagsLookup = Callable[[str], Mapping[str, str]]
+
+REVIEW_TAG = "recommended_review_threshold"
+DECLINE_TAG = "recommended_decline_threshold"
 
 
 class KServeTimeoutError(RuntimeError):
@@ -49,10 +52,8 @@ class ModelVersionCheckError(RuntimeError):
     """The served version's feature_version tag could not be read from MLflow."""
 
 
-def mlflow_feature_version_lookup(
-    tracking_uri: str | None, model_name: str
-) -> FeatureVersionLookup:
-    """The production lookup: the tag on the registry version.
+def mlflow_version_tags_lookup(tracking_uri: str | None, model_name: str) -> VersionTagsLookup:
+    """The production lookup: the tags on the registry version.
 
     MLflow is imported here, when the scorer is built at startup, not inside the
     first lookup: a cold `import mlflow` takes longer than the lookup timeout,
@@ -62,9 +63,9 @@ def mlflow_feature_version_lookup(
 
     client = MlflowClient(tracking_uri)
 
-    def lookup(version: str) -> str | None:
+    def lookup(version: str) -> Mapping[str, str]:
         tags: dict[str, str] = client.get_model_version(model_name, version).tags
-        return tags.get("feature_version")
+        return tags
 
     return lookup
 
@@ -78,7 +79,7 @@ class KServeScorer:
         url: str,
         model_name: str,
         timeout_s: float,
-        lookup: FeatureVersionLookup,
+        lookup: VersionTagsLookup,
         lookup_timeout_s: float = 2.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
@@ -90,9 +91,10 @@ class KServeScorer:
         self._lookup = lookup
         self._transport = transport
         self._client: httpx.AsyncClient | None = None
-        self._verified: set[str] = set()
+        # Verified versions -> their (review, decline) thresholds, or None if untagged.
+        self._verified: dict[str, tuple[float, float] | None] = {}
         self._rejected: dict[str, str] = {}  # version -> reason
-        self._pending: dict[str, asyncio.Task[str | None]] = {}
+        self._pending: dict[str, asyncio.Task[Mapping[str, str]]] = {}
         self._current: str | None = None
 
     @property
@@ -146,20 +148,25 @@ class KServeScorer:
             raise KServeHTTPError(f"HTTP {resp.status_code}: {resp.text[:200]}")
 
         score, version = _parse(resp)
-        await self._check_version(version)
+        thresholds = await self._check_version(version)
         if version != self._current:
             previous, self._current = self.model_version, version
             metrics.set_model_version(self.name, self.model_version)
             log.info("model_version_changed", model_version=self.model_version, previous=previous)
         return ScoreResult(
-            score=score, scorer=self.name, model_version=f"{self.model_name}/{version}"
+            score=score,
+            scorer=self.name,
+            model_version=f"{self.model_name}/{version}",
+            review_threshold=thresholds[0] if thresholds else None,
+            decline_threshold=thresholds[1] if thresholds else None,
         )
 
-    async def _check_version(self, version: str | None) -> None:
+    async def _check_version(self, version: str | None) -> tuple[float, float] | None:
+        """Verify a served version once; returns its recommended thresholds, if tagged."""
         if not version:
             raise IncompatibleModelError("predictor did not report a model_version")
         if version in self._verified:
-            return
+            return self._verified[version]
         if version in self._rejected:
             raise IncompatibleModelError(self._rejected[version])
 
@@ -171,12 +178,13 @@ class KServeScorer:
             self._pending[version] = task
             task.add_done_callback(lambda _: self._pending.pop(version, None))
         try:
-            trained_on = await asyncio.wait_for(asyncio.shield(task), self.lookup_timeout_s)
+            tags = await asyncio.wait_for(asyncio.shield(task), self.lookup_timeout_s)
         except Exception as exc:
             raise ModelVersionCheckError(
                 f"feature_version of {self.model_name} v{version}: {exc!r}"
             ) from exc
 
+        trained_on = tags.get("feature_version")
         if trained_on != FEATURE_VERSION:
             reason = (
                 f"{self.model_name} v{version} was trained on feature version "
@@ -185,7 +193,23 @@ class KServeScorer:
             self._rejected[version] = reason
             log.error("incompatible_model_served", model_version=version, reason=reason)
             raise IncompatibleModelError(reason)
-        self._verified.add(version)
+        thresholds = _thresholds(tags)
+        self._verified[version] = thresholds
+        log.info(
+            "model_version_verified",
+            model_version=version,
+            thresholds=thresholds or "API defaults (version has no recommended thresholds)",
+        )
+        return thresholds
+
+
+def _thresholds(tags: Mapping[str, str]) -> tuple[float, float] | None:
+    """(review, decline) from a version's tags, when both are present and sane."""
+    try:
+        review, decline = float(tags[REVIEW_TAG]), float(tags[DECLINE_TAG])
+    except (KeyError, ValueError):
+        return None
+    return (review, decline) if 0.0 < review <= decline <= 1.0 else None
 
 
 def _parse(resp: httpx.Response) -> tuple[float, str | None]:

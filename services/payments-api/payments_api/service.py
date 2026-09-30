@@ -6,6 +6,7 @@ import time
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy.exc import IntegrityError
@@ -15,9 +16,10 @@ from ml.data.schema import Transaction
 from ml.features import CardContext, build_features
 from payments_api import metrics
 from payments_api.logs import current_request_id
-from payments_api.models import Payment
+from payments_api.models import Payment, as_utc
 from payments_api.policy import DecisionPolicy
 from payments_api.repository import PaymentRepository
+from payments_api.schemas import Feedback
 from payments_api.scoring import FraudScorer, RuleScorer, ScoreResult
 
 log = structlog.get_logger(__name__)
@@ -53,7 +55,7 @@ class PaymentService:
             history = await repo.card_history(txn.card_token, txn.timestamp)
             features = build_features(txn, CardContext.from_history(history, as_of=txn.timestamp))
             result = await self._score(features)
-            decision = self.policy.decide(result.score)
+            decision = self._policy_for(result).decide(result.score)
 
             payment = Payment(
                 payment_id=uuid.uuid4(),
@@ -95,9 +97,50 @@ class PaymentService:
         async with self.sessions() as session:
             return await PaymentRepository(session).get(payment_id)
 
+    async def record_feedback(self, payment_id: uuid.UUID, feedback: Feedback) -> Payment | None:
+        """Store a delayed label on a payment. Last write wins; None if the payment is unknown."""
+        async with self.sessions() as session:
+            payment = await PaymentRepository(session).get(payment_id)
+            if payment is None:
+                return None
+            unchanged = (payment.label, payment.label_reason, payment.label_source) == (
+                feedback.label,
+                feedback.reason,
+                feedback.source,
+            )
+            if unchanged:
+                return payment  # an identical re-post is not a new label
+            now = datetime.now(UTC)
+            payment.label = feedback.label
+            payment.label_reason = feedback.reason
+            payment.label_source = feedback.source
+            payment.labelled_at = now
+            await session.commit()
+            await session.refresh(payment)
+
+        metrics.LABELS.labels(feedback.label, payment.decision).inc()
+        metrics.LABEL_DELAY.observe(max(0.0, (now - as_utc(payment.created_at)).total_seconds()))
+        log.info(
+            "payment_labelled",
+            payment_id=str(payment_id),
+            label=feedback.label,
+            reason=feedback.reason,
+            source=feedback.source,
+            decision=payment.decision,
+            score=round(payment.score, 4),
+        )
+        return payment
+
     async def ping_db(self) -> None:
         async with self.sessions() as session:
             await PaymentRepository(session).ping()
+
+    def _policy_for(self, result: ScoreResult) -> DecisionPolicy:
+        """The model's own recommended thresholds when it has them (they differ per
+        version); otherwise the configured policy, which also covers the rule fallback."""
+        if result.review_threshold is not None and result.decline_threshold is not None:
+            return DecisionPolicy(result.review_threshold, result.decline_threshold)
+        return self.policy
 
     async def _score(self, features: Mapping[str, float]) -> ScoreResult:
         """Primary scorer, falling back to rules on any error. Never raises for scoring."""

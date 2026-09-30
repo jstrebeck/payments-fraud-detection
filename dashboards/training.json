@@ -443,7 +443,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "fraud_registry_version_metric{metric=~\"recall_(account_takeover|card_testing|high_value_new_merchant|impossible_travel)\"}",
+          "expr": "fraud_registry_version_metric{metric=~\"recall_(account_takeover|card_testing|high_value_new_merchant|impossible_travel|session_hijack)\"}",
           "legendFormat": "",
           "refId": "A",
           "range": false,
@@ -605,8 +605,8 @@
     {
       "id": 10,
       "type": "table",
-      "title": "Training Jobs in namespace fraud",
-      "description": "From kube-state-metrics; Jobs are kept for 24h (ttlSecondsAfterFinished).",
+      "title": "Training and retraining Jobs",
+      "description": "From kube-state-metrics. train-*: make train-cluster / train.yml; retrain-*: the retrain CronJob (most runs decide not to retrain and finish in seconds). Jobs are kept for 24h.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -623,7 +623,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (job_name) (kube_job_status_succeeded{namespace=\"fraud\", job_name=~\"train-.*\"})",
+          "expr": "max by (job_name) (kube_job_status_succeeded{namespace=\"fraud\", job_name=~\"(re)?train-.*\"})",
           "legendFormat": "",
           "refId": "A",
           "range": false,
@@ -635,7 +635,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (job_name) (kube_job_status_failed{namespace=\"fraud\", job_name=~\"train-.*\"})",
+          "expr": "max by (job_name) (kube_job_status_failed{namespace=\"fraud\", job_name=~\"(re)?train-.*\"})",
           "legendFormat": "",
           "refId": "B",
           "range": false,
@@ -647,7 +647,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (job_name) (kube_job_status_start_time{namespace=\"fraud\", job_name=~\"train-.*\"}) * 1000",
+          "expr": "max by (job_name) (kube_job_status_start_time{namespace=\"fraud\", job_name=~\"(re)?train-.*\"}) * 1000",
           "legendFormat": "",
           "refId": "C",
           "range": false,

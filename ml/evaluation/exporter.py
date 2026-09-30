@@ -48,6 +48,7 @@ VERSION_METRICS = (
     "recall_card_testing",
     "recall_high_value_new_merchant",
     "recall_impossible_travel",
+    "recall_session_hijack",  # fraud-shift drift pattern (ml/data/drift.py)
 )
 MAX_VERSIONS = 50
 

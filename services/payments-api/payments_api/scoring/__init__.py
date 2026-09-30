@@ -22,11 +22,11 @@ def build_scorer(settings: Settings) -> FraudScorer:
             alias=settings.model_alias,
             refresh_seconds=settings.model_refresh_seconds,
         )
-    from payments_api.scoring.kserve import KServeScorer, mlflow_feature_version_lookup
+    from payments_api.scoring.kserve import KServeScorer, mlflow_version_tags_lookup
 
     return KServeScorer(
         url=settings.kserve_url,
         model_name=settings.model_name,
         timeout_s=settings.kserve_timeout_seconds,
-        lookup=mlflow_feature_version_lookup(settings.mlflow_tracking_uri, settings.model_name),
+        lookup=mlflow_version_tags_lookup(settings.mlflow_tracking_uri, settings.model_name),
     )

@@ -14,12 +14,13 @@ deploy/
     inferenceservice.yaml            fraud-detector, modelFormat mlflow v3, runtime fraud-mlserver
     podmonitor-fraud-detector.yaml   scrapes MLServer metrics (:8082) on the predictor pods
     registry-exporter/               MLflow registry -> Prometheus (ml/evaluation/exporter.py), trainer image
+    drift-monitor/                   PSI of live features vs the champion's training profile (ml/evaluation/drift_monitor.py)
+    retrain/                         CronJob (every 30m: retrain on drift or age, gate, promote, roll) + RBAC, ADR-0015
     prometheusrules.yaml             recording rules and Fraud* alerts (runbooks in docs/runbooks)
     ../../dashboards                 Grafana dashboards as grafana_dashboard ConfigMaps
   overlays/
     homelab/
       kustomization.yaml             image tags (git SHAs; set by scripts/release.sh)
-      payments-api-thresholds.yaml   decision thresholds from the champion's model card
     local/
       README.md                      not implemented; compose is the local path
   jobs/

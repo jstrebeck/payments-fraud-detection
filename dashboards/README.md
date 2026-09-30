@@ -10,6 +10,7 @@ loads them. Grafana: `http://192.168.2.204`.
 |---|---|---|
 | `payments-api.json` | `fraud-payments-api` | payments/min, 5xx ratio, POST /payments p50/p95/p99, scorer latency, decision mix, fallbacks by reason, replays, pods ready |
 | `fraud-model.json` | `fraud-model` | served version vs `champion` alias, flagged share with the 24h drift band, score heatmap, model latency, precision/recall and confusion against simulator truth |
+| `drift.json` | `fraud-drift` | features drifting, max PSI, window size, reference version, PSI per feature over time (0.1/0.25 lines), PSI now, PSI vs each feature's 24h baseline |
 | `training.json` | `fraud-training` | champion, registered versions, time since the last cluster training run, PR-AUC / recall at 1% FPR / per-pattern recall across versions, training Jobs |
 
 Every dashboard has a `datasource` variable (Prometheus), links to the other
@@ -24,6 +25,8 @@ Data sources:
 - Registry and training: `fraud_registry_*` and `fraud_training_*` from the
   registry exporter (`ml/evaluation/exporter.py`, `deploy/base/registry-exporter`),
   plus `kube_job_*` from kube-state-metrics.
+- Drift: `fraud_feature_psi` and `fraud_drift_*` from the drift monitor
+  (`ml/evaluation/drift_monitor.py`), and the `fraud:feature_psi:*` recording rules.
 
 ## Editing
 
@@ -32,5 +35,3 @@ the `datasource` variable, and paste over the file. Keep each `uid` stable so
 links in runbooks do not break. Changes are live after merge + Argo sync;
 Grafana-side edits to provisioned dashboards are overwritten.
 
-Planned: `drift.json` (PSI per feature, drift flag timeline, retrain events)
-in Phase 7.

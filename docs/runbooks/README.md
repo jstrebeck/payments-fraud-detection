@@ -13,5 +13,5 @@ Planned (create as the corresponding phase lands):
 | `rollback-api.md` | 5 | Bad API release; revert tag-bump commit, Argo sync |
 | [`scorer-fallback-firing.md`](scorer-fallback-firing.md) | 6 | `FraudScorerFallbackHigh`: triage by fallback `reason`, predictor, storage initializer, MLflow |
 | `manual-training-run.md` | 5 | Run training outside the schedule; dispatch workflow or apply Job |
-| `drift-alert.md` | 7 | `fraud_feature_psi` alert; inspect report, decide retrain or threshold change |
+| [`drift-alert.md`](drift-alert.md) | 7 | `FraudFeatureDrift` / `FraudDriftMonitorDown`: read PSI against each feature's baseline, decide retrain or threshold change, backfill a missing reference profile |
 | `rebuild-after-cluster-reset.md` | 5 | Homelab rebuilt; order of operations across both repos |

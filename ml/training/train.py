@@ -25,6 +25,7 @@ from mlflow import MlflowClient
 from mlflow.models import infer_signature
 
 from ml.evaluation.card import render_model_card
+from ml.evaluation.drift import PROFILE_ARTIFACT, build_profile
 from ml.evaluation.metrics import EvalReport, evaluate
 from ml.evaluation.promote import (
     CARD,
@@ -92,14 +93,32 @@ def fit(split: Split, config: TrainConfig) -> lgb.LGBMClassifier:
 
 
 def train(settings: TrainSettings, config: TrainConfig) -> TrainResult:
+    """Train on the generated Parquet dataset at `settings.data_uri`."""
     dataset, data_meta = load_dataset(settings.data_uri)
-    split = time_split(dataset, config.split)
+    return train_on_split(settings, config, time_split(dataset, config.split), data_meta)
+
+
+def train_on_split(
+    settings: TrainSettings,
+    config: TrainConfig,
+    split: Split,
+    data_meta: dict[str, str],
+    *,
+    extra_params: dict[str, Any] | None = None,
+    extra_tags: dict[str, str] | None = None,
+) -> TrainResult:
+    """Fit, evaluate, log, register and (with `settings.promote`) gate one model.
+
+    `train` feeds it a time split of generated data; `ml.training.retrain` feeds
+    it generated history plus labelled live decisions. `extra_params` and
+    `extra_tags` describe where the data came from (run params, version tags).
+    """
     sha = settings.git_sha or git_sha()
 
     mlflow.set_experiment(settings.mlflow_experiment_name)
     with mlflow.start_run() as run:
         run_id = run.info.run_id
-        mlflow.set_tags({"git_sha": sha, "feature_version": FEATURE_VERSION})
+        mlflow.set_tags({"git_sha": sha, "feature_version": FEATURE_VERSION, **(extra_tags or {})})
         mlflow.log_params(
             {
                 "data_uri": str(settings.data_uri),
@@ -115,9 +134,12 @@ def train(settings: TrainSettings, config: TrainConfig) -> TrainResult:
                 "categorical_features": ",".join(config.categorical_features),
                 **{f"lgbm.{k}": v for k, v in config.lightgbm.items()},
                 **{f"gate.{k}": v for k, v in config.gate.model_dump().items()},
+                **(extra_params or {}),
             }
         )
         mlflow.log_dict(config.model_dump(), "train_config.json")
+        # Reference for the drift monitor: how each feature was distributed in training.
+        mlflow.log_dict(build_profile(split.train.features).to_dict(), PROFILE_ARTIFACT)
 
         model = fit(split, config)
         mlflow.log_metric("best_iteration", model.best_iteration_)
@@ -154,6 +176,10 @@ def train(settings: TrainSettings, config: TrainConfig) -> TrainResult:
             "seed": data_meta.get("seed", "unknown"),
             "git_sha": sha,
             "data_uri": str(settings.data_uri),
+            # The API applies these when this version is served (review/decline).
+            "recommended_review_threshold": f"{report.recommended_thresholds['review']:.6f}",
+            "recommended_decline_threshold": f"{report.recommended_thresholds['decline']:.6f}",
+            **(extra_tags or {}),
         }
         for key, value in tags.items():
             client.set_model_version_tag(settings.model_name, version, key, value)

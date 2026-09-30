@@ -121,6 +121,20 @@ spec:
             description: Expected after scripts/promote.py; otherwise find out who moved the champion alias.
             runbook_url: https://github.com/jstrebeck/payments-fraud-detection/blob/main/docs/runbooks/rollback-model.md
 
+        - alert: FraudRetrainFailed
+          # The retrain CronJob errored (a skip or a gate rejection is a success).
+          expr: |
+            max by (job_name) (kube_job_status_failed{namespace="fraud", job_name=~"retrain-.*"}) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "Retraining Job {{ $labels.job_name }} failed"
+            description: >-
+              kubectl -n fraud logs job/{{ $labels.job_name }}. Exit 4 means the
+              champion moved but the predictor rollout failed: run
+              scripts/promote.py --rollout-only.
+            runbook_url: https://github.com/jstrebeck/payments-fraud-detection/blob/main/docs/runbooks/drift-alert.md
+
         - alert: FraudRegistryExporterDown
           expr: max(fraud_registry_up) < 1 or absent(fraud_registry_up)
           for: 15m
@@ -129,3 +143,53 @@ spec:
           annotations:
             summary: The registry exporter cannot read MLflow
             description: The training dashboard is stale. Check MLflow at http://mlflow.mlops.svc and the registry-exporter pod.
+
+    - name: fraud.drift
+      interval: 1m
+      rules:
+        # Per feature, independent of which drift-monitor pod exported it.
+        - record: fraud:feature_psi:max
+          expr: max by (feature) (fraud_feature_psi)
+        # Each feature's usual PSI: the median over the previous day, excluding
+        # the last hour. Live traffic never matches training exactly (e.g. card
+        # history features differ between the simulator's world and the
+        # training world), so drift is judged against this baseline, not 0.
+        - record: fraud:feature_psi:baseline_24h
+          expr: quantile_over_time(0.5, fraud:feature_psi:max[24h] offset 1h)
+        # Features that are both shifted (PSI > 0.25) and well above their usual level.
+        - record: fraud:feature_psi:drifting
+          expr: |
+            fraud:feature_psi:max > 0.25
+              and fraud:feature_psi:max > 2 * fraud:feature_psi:baseline_24h
+
+        - alert: FraudFeatureDrift
+          # Two or more features drifting, or one far out. PSI is only exported
+          # when the window holds at least --min-rows payments, and the
+          # baseline needs an hour of history, so a fresh deploy stays quiet.
+          expr: |
+            count(fraud:feature_psi:drifting) >= 2
+              or max(fraud:feature_psi:drifting) > 0.5
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Live feature distributions have drifted from the champion's training data
+            description: >-
+              Drifting features and their PSI: query fraud:feature_psi:drifting,
+              or the Fraud / drift dashboard. Automated retraining (Phase 7)
+              reacts to this alert.
+            runbook_url: https://github.com/jstrebeck/payments-fraud-detection/blob/main/docs/runbooks/drift-alert.md
+
+        - alert: FraudDriftMonitorDown
+          expr: max(fraud_drift_up) < 1 or absent(fraud_drift_up)
+          for: 20m
+          labels:
+            severity: warning
+          annotations:
+            summary: The drift monitor is not computing PSI
+            description: >-
+              Check the drift-monitor pod logs. Common causes: the champion has
+              no reference/feature_profile.json (backfill with
+              `python -m ml.evaluation.drift profile --version N`), MLflow or
+              the payments database unreachable.
+            runbook_url: https://github.com/jstrebeck/payments-fraud-detection/blob/main/docs/runbooks/drift-alert.md

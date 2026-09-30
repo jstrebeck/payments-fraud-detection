@@ -9,8 +9,8 @@ serving concern in this project (ADR-0001). No authentication: it is a demo.
 | Method | Path | Notes |
 |---|---|---|
 | `POST` | `/payments` | Body: `ml.data.schema.Transaction` (label fields are rejected with 422). Returns `{payment_id, transaction_id, decision, score, scorer, model_version}`. `201` when scored, `200` with the stored decision when the `transaction_id` was seen before (idempotent). |
-| `GET` | `/payments/{payment_id}` | Decision record plus the transaction, the features used and the `request_id` that created it. |
-| `POST` | `/payments/{payment_id}/feedback` | Phase 7. Body `{label: "fraud" \| "legit", source}`. |
+| `GET` | `/payments/{payment_id}` | Decision record plus the transaction, the features used, the `request_id` that created it, and its label if feedback arrived (`label`, `label_reason`, `label_source`, `labelled_at`). |
+| `POST` | `/payments/{payment_id}/feedback` | Delayed label. Body `{label: "fraud" \| "legit", reason, source}`: `reason` (chargeback reason, e.g. the fraud pattern) only with `fraud`; `source` like `simulator`, `chargeback`, `manual`. Last write wins; an identical re-post changes nothing. Returns the record. `404` for an unknown payment. |
 | `GET` | `/healthz` | Process up. |
 | `GET` | `/readyz` | `200` when the database answers. `scorer` is `ok`, or `fallback` while the primary scorer is unavailable and rules are serving; set `REQUIRE_SCORER=true` to make that a `503`. |
 | `GET` | `/metrics` | Prometheus. Names in `docs/architecture.md` "Key metrics". |
@@ -28,7 +28,7 @@ returns the original request's ID). See `docs/runbooks/trace-a-payment.md`.
 |---|---|---|
 | `DATABASE_URL` | `postgresql+asyncpg://fraud:fraud@localhost:5432/payments` | In the cluster, from Secret `payments-db` |
 | `FRAUD_SCORER` | `rule` | `rule`, `mlflow` (compose default), `kserve` (cluster) |
-| `REVIEW_THRESHOLD` / `DECLINE_THRESHOLD` | `0.5` / `0.8` | Decision policy for every scorer; the model card recommends model-specific values |
+| `REVIEW_THRESHOLD` / `DECLINE_THRESHOLD` | `0.5` / `0.8` | Decision policy for the rule fallback and for model versions without recommended thresholds. A served KServe version tagged `recommended_review_threshold` / `recommended_decline_threshold` (every version trained since Phase 7, and v2 by backfill) is decided with its own thresholds (ADR-0015) |
 | `KSERVE_URL` | `http://fraud-detector-predictor.fraud.svc/v2/models/fraud-detector/infer` | `KServeScorer` V2 endpoint; `/ready` is derived from it |
 | `KSERVE_TIMEOUT_SECONDS` | `0.3` | Whole predictor request budget; past it the payment is scored by rules |
 | `MLFLOW_TRACKING_URI` | MLflow default | `MlflowScorer` registry; `KServeScorer` feature-version lookups |
@@ -36,6 +36,18 @@ returns the original request's ID). See `docs/runbooks/trace-a-payment.md`.
 | `MODEL_REFRESH_SECONDS` | `60` | How often to check whether the alias moved; `0` disables hot reload |
 | `REQUIRE_SCORER` | `false` | Fail readiness while rules are standing in |
 | `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `console` | The image sets `LOG_FORMAT=json` |
+
+## Labels (Phase 7)
+
+Labels arrive later than decisions: chargebacks for fraud, confirmations for
+a sample of legitimate payments (the simulator imitates both). They are
+stored on the payment row (`label`, `label_reason`, `label_source`,
+`labelled_at`; migration `0003`, with a partial index on `created_at` for
+labelled rows) and are the training data for retraining. Each accepted label
+counts in `fraud_labels_total{label, decision}` (the decision originally
+made), and the wait in `fraud_label_delay_seconds`. Precision and recall of
+the served decisions are PromQL over that counter, e.g. recall =
+flagged fraud labels / all fraud labels.
 
 ## Layout
 

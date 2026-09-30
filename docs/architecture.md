@@ -19,7 +19,7 @@ deliberately thin; the interesting part is the machinery around the model.
 | payments-api | `services/payments-api` | Deployment | `POST /payments`: validate, featurise, score via KServe, persist decision, respond. |
 | simulator | `services/simulator` | Deployment (cluster) / CLI (local) | Drives traffic and delayed label feedback. |
 | Postgres (payments) | homelab repo | StatefulSet | Decision log and labels. Source for retraining. |
-| Drift job | `ml/evaluation` | CronJob | Compare live feature distributions to training reference; export metrics. |
+| Drift monitor | `ml/evaluation/drift_monitor.py` | Deployment (exporter) | Every 5 minutes, PSI of the last hour of live feature vectors against the champion's training profile; Prometheus metrics. A long-running exporter rather than a CronJob, so Prometheus can scrape it without a Pushgateway. |
 | Prometheus / Grafana | homelab repo (stack), `dashboards/` (this repo) | existing | Metrics, dashboards, alerts. |
 | Argo CD | homelab repo | existing after Phase 5 | Syncs `deploy/overlays/homelab` into namespace `fraud`. |
 | GitHub Actions | `.github/workflows` | self-hosted runner VM | Lint, test, build, push, bump tag, trigger training. |
@@ -125,8 +125,12 @@ Step by step: `docs/runbooks/trace-a-payment.md`.
 | `fraud_sim_decisions_total{decision,truth}` | counter | Simulator side: live confusion counts against ground truth |
 | `fraud_registry_alias_version{alias}`, `fraud_registry_version_metric{version,metric}`, `fraud_training_last_run_timestamp_seconds{experiment,status}` | gauge | MLflow registry and training runs, via the registry exporter (`ml/evaluation/exporter.py`); the training dashboard |
 | `fraud:flagged_share:ratio_rate1h` / `_rate24h`, `fraud:scorer_fallback:ratio_rate5m`, `fraud:payments_post_latency_seconds:p99_5m` | recording rules | Inputs to the `Fraud*` alerts (`deploy/base/prometheusrules.yaml`) |
-| `fraud_feature_psi{feature}` | gauge | Drift per feature (Phase 7) |
-| `fraud_labelled_precision`, `fraud_labelled_recall` | gauge | Delayed ground-truth quality (Phase 7) |
+| `fraud_feature_psi{feature}` | gauge | Drift per feature: PSI of the last hour of payments against the champion's training profile (drift monitor, calendar features excluded) |
+| `fraud_drift_window_rows`, `fraud_drift_reference_version`, `fraud_drift_up`, `fraud_drift_last_run_timestamp_seconds` | gauge | Drift monitor health: window size (PSI needs 300), which champion's profile, last computation |
+| `fraud:feature_psi:max`, `fraud:feature_psi:baseline_24h`, `fraud:feature_psi:drifting` | recording rules | Per-feature PSI, its 24h median, and features above both 0.25 and twice their median: inputs to `FraudFeatureDrift` |
+| `fraud_labels_total{label,decision}` | counter | Delayed labels by label and the decision originally made. Precision = `sum(rate(fraud_labels_total{label="fraud",decision!="approved"}[1h])) / sum(rate(fraud_labels_total{decision!="approved"}[1h]))`; recall = flagged fraud labels over all fraud labels. Legit labels are a sample, so precision is an estimate. |
+| `fraud_label_delay_seconds` | histogram | Time from scoring to label (chargeback delay) |
+| `fraud_sim_feedback_total{label,outcome}` | counter | Simulator side: labels scheduled, sent, errored, dropped |
 
 ## Data schema (transactions)
 

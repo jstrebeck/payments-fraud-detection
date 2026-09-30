@@ -60,6 +60,16 @@ Meanwhile the API keeps answering with the rule scorer (counted in
 `fraud_scorer_fallback_total`), so payments are still decided. Fix MLflow
 reachability or the alias, then rerun step 2.
 
+## Automated retraining
+
+The `retrain` CronJob (ADR-0015) may have made the promotion you are rolling
+back. After a retrain it waits 6 hours before retraining again, so it will
+not immediately re-promote; if drift keeps firing it will retrain after the
+cooldown and promote only through the gate. To stop it while you
+investigate: `kubectl -n fraud patch cronjob retrain -p '{"spec":{"suspend":true}}'`
+(Argo CD self-heal reverts that within minutes; for longer, set
+`suspend: true` in `deploy/base/retrain/cronjob.yaml` through Git).
+
 ## Roll forward again
 
 Once the fix is trained and registered, promote it through the gate as usual
