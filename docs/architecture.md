@@ -45,6 +45,32 @@ deliberately thin; the interesting part is the machinery around the model.
    `fraud | legit` for a sample, simulating chargebacks. Labels land in the
    same table.
 
+## Tracing a payment
+
+One correlation ID follows a payment through every hop:
+
+1. **simulator** generates it (uuid4 hex) and sends it as `x-request-id`; it
+   logs it on `payment_failed` and on `payment_outcome` for flagged or
+   fraudulent payments.
+2. **payments-api** keeps a well-formed caller ID (or makes one), binds it to
+   structlog, so every API log line for the request (`request`,
+   `payment_scored`, `scorer_failed_using_fallback`) has `request_id`, and
+   echoes it in the response header.
+3. **KServeScorer** sends it to the predictor as the V2 request `id` and as
+   `x-request-id`. MLServer echoes the `id` in its response. MLServer's own
+   access log does not print it, so that hop is matched by time.
+4. **Postgres**: stored as `payments.request_id` (indexed) and returned by
+   `GET /payments/{id}`.
+
+```
+kubectl -n fraud logs deploy/simulator | grep '"decision": "declined"' | tail -1   # pick a request_id
+kubectl -n fraud logs deploy/payments-api -c payments-api | grep <request_id>
+kubectl -n fraud exec payments-postgres-0 -- psql -U payments -d payments \
+  -c "select payment_id, decision, score, scorer, model_version from payments where request_id = '<request_id>'"
+```
+
+Step by step: `docs/runbooks/trace-a-payment.md`.
+
 ## Training path (offline)
 
 1. Training image starts as a Kubernetes Job (manual, scheduled, or from a
@@ -97,6 +123,8 @@ deliberately thin; the interesting part is the machinery around the model.
 | `fraud_payments_replayed_total` | counter | Idempotent replays of an already-scored transaction |
 | `fraud_http_requests_total{method,route,status}`, `fraud_http_request_duration_seconds` | counter, histogram | RED metrics for every route |
 | `fraud_sim_decisions_total{decision,truth}` | counter | Simulator side: live confusion counts against ground truth |
+| `fraud_registry_alias_version{alias}`, `fraud_registry_version_metric{version,metric}`, `fraud_training_last_run_timestamp_seconds{experiment,status}` | gauge | MLflow registry and training runs, via the registry exporter (`ml/evaluation/exporter.py`); the training dashboard |
+| `fraud:flagged_share:ratio_rate1h` / `_rate24h`, `fraud:scorer_fallback:ratio_rate5m`, `fraud:payments_post_latency_seconds:p99_5m` | recording rules | Inputs to the `Fraud*` alerts (`deploy/base/prometheusrules.yaml`) |
 | `fraud_feature_psi{feature}` | gauge | Drift per feature (Phase 7) |
 | `fraud_labelled_precision`, `fraud_labelled_recall` | gauge | Delayed ground-truth quality (Phase 7) |
 

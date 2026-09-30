@@ -9,6 +9,7 @@ trainer and `scripts/promote.py`. Needs the `train` extra.
 | `gate.py` | `gate(challenger, champion, rule) -> GateResult`. Pure. |
 | `promote.py` | `run_gate(client, name, version, rule)`: the registry side. The only code that moves `champion` |
 | `card.py`, `model_card_template.md` | `render_model_card(...)`; fails on any unfilled placeholder |
+| `exporter.py` | Prometheus exporter for the MLflow registry (`python -m ml.evaluation.exporter`): alias targets, per-version test metrics, newest training run per experiment. Runs as `deploy/base/registry-exporter` from the trainer image; feeds the training dashboard |
 
 ## Gate rule (`ml/training/config.yaml`)
 

@@ -11,3 +11,5 @@ images:
     newTag: 5a4d8c3
   - name: 192.168.2.203:5000/fraud/simulator
     newTag: 5a4d8c3
+  - name: 192.168.2.203:5000/fraud/trainer
+    newTag: 5a4d8c3

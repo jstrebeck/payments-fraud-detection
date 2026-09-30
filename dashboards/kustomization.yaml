@@ -1,0 +1,23 @@
+# One ConfigMap per dashboard, labelled for the homelab Grafana's dashboard
+# sidecar (it watches all namespaces for grafana_dashboard: "1"). Included by
+# deploy/base, so Argo CD provisions them. Stable names so Grafana keeps each
+# dashboard's uid and URL.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    # Folder in Grafana, if the sidecar's folder annotation is enabled.
+    grafana_folder: Fraud
+configMapGenerator:
+  - name: grafana-dashboard-fraud-payments-api
+    files:
+      - payments-api.json
+  - name: grafana-dashboard-fraud-model
+    files:
+      - fraud-model.json
+  - name: grafana-dashboard-fraud-training
+    files:
+      - training.json

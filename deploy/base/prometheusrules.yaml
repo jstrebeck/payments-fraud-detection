@@ -1,0 +1,127 @@
+# Alerts for the fraud-scoring path (Phase 6). Picked up by the homelab's
+# kube-prometheus-stack via the `release` label; routed by its Alertmanager.
+# Every alert names a runbook in docs/runbooks/.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: fraud
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: fraud.recording
+      interval: 1m
+      rules:
+        # Share of payments sent to review or declined.
+        - record: fraud:flagged_share:ratio_rate1h
+          expr: |
+            sum(rate(fraud_payments_total{decision!="approved"}[1h]))
+              / clamp_min(sum(rate(fraud_payments_total[1h])), 1e-9)
+        - record: fraud:flagged_share:ratio_rate24h
+          expr: |
+            sum(rate(fraud_payments_total{decision!="approved"}[24h]))
+              / clamp_min(sum(rate(fraud_payments_total[24h])), 1e-9)
+        - record: fraud:scorer_fallback:ratio_rate5m
+          expr: |
+            sum(rate(fraud_scorer_fallback_total[5m]))
+              / clamp_min(sum(rate(fraud_payments_total[5m])), 1e-9)
+        - record: fraud:payments_post_latency_seconds:p99_5m
+          expr: |
+            histogram_quantile(0.99, sum by (le) (
+              rate(fraud_http_request_duration_seconds_bucket{method="POST",route="/payments"}[5m])))
+
+    - name: fraud.serving
+      rules:
+        - alert: FraudScorerFallbackHigh
+          expr: fraud:scorer_fallback:ratio_rate5m > 0.05
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $value | humanizePercentage }} of payments scored by the rule fallback"
+            description: >-
+              The KServe model is failing or timing out and rules are deciding
+              payments. Check fraud_scorer_fallback_total by reason and the
+              predictor pod.
+            runbook_url: https://github.com/jstrebeck/payments-fraud-detection/blob/main/docs/runbooks/scorer-fallback-firing.md
+
+        - alert: FraudPaymentsLatencyP99High
+          expr: fraud:payments_post_latency_seconds:p99_5m > 0.5
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "POST /payments p99 is {{ $value | humanizeDuration }}"
+            description: >-
+              Over the 500ms budget for 10 minutes. Compare
+              fraud_scorer_latency_seconds (model) with the database time in
+              the API logs.
+            runbook_url: https://github.com/jstrebeck/payments-fraud-detection/blob/main/docs/runbooks/scorer-fallback-firing.md
+
+        - alert: FraudPaymentsApiDown
+          expr: absent(up{namespace="fraud", job="payments-api"} == 1)
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: No healthy payments-api target is being scraped
+            description: Payments cannot be scored. Check the Deployment and the Argo CD app.
+            runbook_url: https://github.com/jstrebeck/payments-fraud-detection/blob/main/docs/runbooks/scorer-fallback-firing.md
+
+        - alert: FraudPredictorUnavailable
+          expr: |
+            kube_deployment_status_replicas_available{namespace="fraud", deployment="fraud-detector-predictor"} < 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: The fraud-detector predictor has no available replicas
+            description: >-
+              Usually the MLflow storage initializer cannot resolve the
+              champion alias or download it. The API is on the rule fallback
+              meanwhile.
+            runbook_url: https://github.com/jstrebeck/payments-fraud-detection/blob/main/docs/runbooks/rollback-model.md
+
+    - name: fraud.model
+      rules:
+        - alert: FraudDecisionMixDrift
+          # The last hour flags more than twice, or less than half, the share
+          # of the last day. Needs volume so a quiet hour doesn't trip it.
+          expr: |
+            (
+              fraud:flagged_share:ratio_rate1h > 2 * fraud:flagged_share:ratio_rate24h
+              or
+              fraud:flagged_share:ratio_rate1h < 0.5 * fraud:flagged_share:ratio_rate24h
+            )
+            and on() sum(increase(fraud_payments_total[1h])) > 500
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Flagged share {{ $value | humanizePercentage }} over the last hour is outside the 24h band"
+            description: >-
+              The model is flagging a very different share of traffic than
+              usual: traffic changed (drift) or the model or thresholds did.
+              Check the fraud-model dashboard and recent promotions.
+
+        - alert: FraudModelVersionChanged
+          # More than one live version reported in 15 minutes = a promotion or
+          # rollback went out. Informational: confirms the change landed.
+          expr: |
+            count(count by (version) (
+              count_over_time(fraud_model_version_info{scorer="kserve"}[15m]))) > 1
+          labels:
+            severity: info
+          annotations:
+            summary: The served fraud-detector version changed
+            description: Expected after scripts/promote.py; otherwise find out who moved the champion alias.
+            runbook_url: https://github.com/jstrebeck/payments-fraud-detection/blob/main/docs/runbooks/rollback-model.md
+
+        - alert: FraudRegistryExporterDown
+          expr: max(fraud_registry_up) < 1 or absent(fraud_registry_up)
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: The registry exporter cannot read MLflow
+            description: The training dashboard is stale. Check MLflow at http://mlflow.mlops.svc and the registry-exporter pod.

@@ -26,6 +26,7 @@ score = [
 # Training, evaluation and the promotion gate.
 train = [
     "ml[data,score]",
+    "prometheus-client>=0.26",  # ml.evaluation.exporter (registry metrics for Grafana)
     "pydantic-settings>=2.15",
     "pyyaml>=6.0",
 ]

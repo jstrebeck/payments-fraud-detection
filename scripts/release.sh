@@ -30,13 +30,13 @@ for img in "${!DOCKERFILES[@]}"; do
   docker push "$ref"
 done
 
-# Only the long-running workloads are in the overlay; the trainer tag is
-# chosen per run by train.yml / make train-cluster.
+# The trainer image also runs the registry exporter, so it is pinned too;
+# training Jobs pick their own tag per run (train.yml / make train-cluster).
 python3 - "$OVERLAY" "$REGISTRY" "$SHA" <<'PY'
 import re, sys
 path, registry, sha = sys.argv[1:]
 text = open(path).read()
-for img in ("payments-api", "simulator"):
+for img in ("payments-api", "simulator", "trainer"):
     pattern = rf"(- name: {re.escape(registry)}/{img}\n\s+newTag: )\S+"
     text, n = re.subn(pattern, rf"\g<1>{sha}", text)
     if n != 1:

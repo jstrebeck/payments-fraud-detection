@@ -14,3 +14,7 @@ resources:
   - serving-runtime.yaml
   - inferenceservice.yaml
   - podmonitor-fraud-detector.yaml
+  - registry-exporter
+  - prometheusrules.yaml
+  # Grafana dashboards as labelled ConfigMaps (a kustomization in ../../dashboards).
+  - ../../dashboards

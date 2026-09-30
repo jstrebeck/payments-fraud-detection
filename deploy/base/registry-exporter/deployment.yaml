@@ -1,0 +1,72 @@
+# Exposes MLflow registry state (aliases, per-version evaluation metrics, last
+# training runs) as Prometheus gauges for the training dashboard
+# (ml/evaluation/exporter.py). Runs from the trainer image: same `ml` code and
+# MLflow client, no extra image to build.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry-exporter
+  labels:
+    app.kubernetes.io/name: registry-exporter
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: registry-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: registry-exporter
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: registry-exporter
+          image: 192.168.2.203:5000/fraud/trainer
+          command: ["python", "-m", "ml.evaluation.exporter", "--port", "9101"]
+          env:
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow.mlops.svc
+            - name: MODEL_NAME
+              value: fraud-detector
+            - name: TRAINING_EXPERIMENTS
+              value: fraud-detector,fraud-detector-dev
+          ports:
+            - name: metrics
+              containerPort: 9101
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: metrics
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 20m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
