@@ -5,7 +5,7 @@ and keep the "Current phase" pointer accurate. Items marked **(homelab)** are
 built in the `Homelab-Configuration` repo, and are listed here only so the
 dependency is visible.
 
-**Current phase:** 6 (Phase 5 waits only on the self-hosted runner; deploys are manual until then)
+**Current phase:** 7 (Phase 5 waits only on the self-hosted runner; deploys are manual until then)
 
 ## Phase 0: Scaffold and design
 
@@ -159,15 +159,22 @@ registered, both steps run from GitHub unchanged.
 
 ## Phase 6: Observability
 
-- [ ] Grafana dashboards in `dashboards/`: API (RED metrics), model (score
+- [x] Grafana dashboards in `dashboards/`: API (RED metrics), model (score
       distribution, decision mix, fallback rate), training (last run, metrics
       over versions via MLflow)
-- [ ] `PrometheusRule`s: high fallback rate, p99 latency, fraud rate drift
+- [x] `PrometheusRule`s: high fallback rate, p99 latency, fraud rate drift
       beyond band, model version changed
-- [ ] Structured request logging with correlation IDs end to end
+- [x] Structured request logging with correlation IDs end to end
 
 Done when: dashboards are provisioned by GitOps and at least one alert has
 been seen firing and resolving.
+**Met 2026-09-30:** three dashboards (`dashboards/`) and the `fraud`
+PrometheusRule ship through `deploy/base`, so Argo CD provisions them; the
+Grafana sidecar loaded all three. `FraudScorerFallbackHigh` fired at 05:06 UTC
+and resolved at 05:14 in a GitOps drill (`docs/runbooks/scorer-fallback-firing.md`).
+Registry and training metrics come from `ml/evaluation/exporter.py`.
+Decision thresholds now follow the champion's model card
+(`deploy/overlays/homelab/payments-api-thresholds.yaml`).
 
 ## Phase 7: Feedback loop, drift and retraining
 

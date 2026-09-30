@@ -72,9 +72,26 @@ The fallback share on the dashboard drops to 0, `FraudScorerFallbackHigh`
 resolves (Prometheus `ALERTS{alertname="FraudScorerFallbackHigh"}` disappears),
 and new rows in `payments` have `scorer = kserve`.
 
-## Drill
+## Drill (2026-09-30)
 
-This alert was exercised on 2026-09-30 by setting `KSERVE_TIMEOUT_SECONDS` to
-1ms through a commit to `deploy/overlays/homelab` (every call timed out),
-watching the alert fire, and reverting the commit. See the git history for
-`chore(drill)`.
+Exercised end to end through GitOps, as a Phase 6 acceptance test:
+
+| Time (UTC) | Event |
+|---|---|
+| 05:02 | `3491307 chore(drill)`: `KSERVE_TIMEOUT_SECONDS=0.001` in `deploy/overlays/homelab`, so every model call times out |
+| 05:04 | Argo CD rolled it out; alert `pending` |
+| 05:06 | `FraudScorerFallbackHigh` **firing** (72% of payments on the rule fallback), received by Alertmanager |
+| 05:07 | `816e6d1` reverts the drill commit |
+| 05:14 | Alert **resolved**; fallback ratio back to 0 |
+
+Payments kept being decided throughout (by `rules-v1`). The drill also
+caught a false positive: `FraudModelVersionChanged` fired because a starting
+API pod reports version `unknown`; fixed in `a148e38`.
+
+Alertmanager routes these to the homelab's `null` receiver today, so they
+are visible in the Prometheus and Alertmanager UIs (and as annotations on the
+fraud dashboards) but page nobody. Add a receiver in the homelab repo's
+kube-prometheus-stack values to get notified.
+
+To repeat it: the same two commits (set the timeout, then `git revert`),
+while watching `ALERTS{alertname="FraudScorerFallbackHigh"}`.
