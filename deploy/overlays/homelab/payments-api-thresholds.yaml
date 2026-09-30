@@ -17,7 +17,3 @@ spec:
               value: "0.019"
             - name: DECLINE_THRESHOLD
               value: "0.138"
-            # DRILL (reverted right after): every model call times out, so
-            # FraudScorerFallbackHigh must fire. docs/runbooks/scorer-fallback-firing.md
-            - name: KSERVE_TIMEOUT_SECONDS
-              value: "0.001"
