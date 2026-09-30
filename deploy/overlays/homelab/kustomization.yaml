@@ -6,6 +6,6 @@ resources:
   - ../../base
 images:
   - name: 192.168.2.203:5000/fraud/payments-api
-    newTag: c3ef6c4
+    newTag: 5a4d8c3
   - name: 192.168.2.203:5000/fraud/simulator
-    newTag: c3ef6c4
+    newTag: 5a4d8c3
