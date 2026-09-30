@@ -51,14 +51,18 @@ class ModelVersionCheckError(RuntimeError):
 def mlflow_feature_version_lookup(
     tracking_uri: str | None, model_name: str
 ) -> FeatureVersionLookup:
-    """The production lookup: the tag on the registry version. MLflow is imported lazily."""
+    """The production lookup: the tag on the registry version.
+
+    MLflow is imported here, when the scorer is built at startup, not inside the
+    first lookup: a cold `import mlflow` takes longer than the lookup timeout,
+    so the first scored payment would otherwise fall back to rules.
+    """
+    from mlflow import MlflowClient
+
+    client = MlflowClient(tracking_uri)
 
     def lookup(version: str) -> str | None:
-        from mlflow import MlflowClient
-
-        tags: dict[str, str] = (
-            MlflowClient(tracking_uri).get_model_version(model_name, version).tags
-        )
+        tags: dict[str, str] = client.get_model_version(model_name, version).tags
         return tags.get("feature_version")
 
     return lookup
