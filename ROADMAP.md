@@ -5,7 +5,7 @@ and keep the "Current phase" pointer accurate. Items marked **(homelab)** are
 built in the `Homelab-Configuration` repo, and are listed here only so the
 dependency is visible.
 
-**Current phase:** 8 (Phase 5 waits only on the self-hosted runner; deploys are manual until then)
+**Current phase:** all phases built. Open item: register the self-hosted GitHub Actions runner (Phase 5); until then deploys are manual
 
 ## Phase 0: Scaffold and design
 
@@ -202,7 +202,8 @@ the drill, traffic was reverted and v2 put back with the rollback runbook
 ## Phase 8: Polish for the portfolio
 
 - [x] Architecture diagram image in `docs/` (`docs/architecture.svg`, in the README)
-- [ ] README walkthrough with screenshots (MLflow, Grafana, Argo CD)
+- [x] README walkthrough with screenshots (MLflow, Grafana, Argo CD): the
+      Phase 7 drift drill told end to end (`docs/img/`)
 - [x] Short demo script (`scripts/demo.sh`): cluster tour or `local` compose loop
 - [x] Repo badges: CI status, license, Python version
 

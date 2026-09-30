@@ -10,7 +10,7 @@ transaction for fraud in real time, with the full lifecycle of the model
 running on a self-hosted Kubernetes homelab.
 
 **Author:** Josh Strebeck ([@jstrebeck](https://github.com/jstrebeck))
-**Status:** Phases 0 to 7 in place. The API runs in the homelab and scores every payment with the `champion` model served by KServe, deployed by Argo CD from `deploy/overlays/homelab`, with dashboards, alerts, correlation IDs, delayed label feedback, drift detection, and alert-driven retraining that promotes only through the evaluation gate. Next: Phase 8, portfolio polish. See [ROADMAP.md](ROADMAP.md).
+**Status:** all eight phases built. The API runs in the homelab and scores every payment with the `champion` model served by KServe, deployed by Argo CD from `deploy/overlays/homelab`, with dashboards, alerts, correlation IDs, delayed label feedback, drift detection, and alert-driven retraining that promotes only through the evaluation gate. See the walkthrough below. See [ROADMAP.md](ROADMAP.md).
 **Note:** the self-hosted GitHub Actions runner is offline for now, so the image build/push and cluster-training workflows are skipped and deploys are run by hand (`make release`, `make train-cluster`). Details in [docs/ci-cd.md](docs/ci-cd.md).
 **License:** [MIT](LICENSE)
 
@@ -32,6 +32,65 @@ running on a self-hosted Kubernetes homelab.
 
 Full description: [docs/architecture.md](docs/architecture.md). The diagram is
 `docs/architecture.svg`.
+
+## Walkthrough: one drift, handled end to end
+
+On 2026-09-30 the simulator's traffic was deliberately drifted with a single
+Git commit (the `fraud-shift` profile: inflated amounts, more e-commerce, and a
+new `session_hijack` fraud pattern the champion had never seen). Everything
+after that commit happened without a human. The screenshots cover
+06:30 to 10:30 UTC; the stat tiles at the top of each Grafana dashboard show
+the live values at capture time, after the drill had been rolled back.
+
+**1. Drift is detected.** The drift monitor compares the last hour of live
+feature vectors with the champion's training profile (population stability
+index per feature). From about 07:00 the amount and channel features leave
+their usual range and `FraudFeatureDrift` fires at 07:54 (red regions are
+alerts).
+
+![Grafana, Fraud / drift dashboard during the drill: PSI per feature over time, rising from about 07:00, with drift alert regions](docs/img/grafana-fraud-drift.png)
+
+*This capture predates a fix: the "features drifting" count and the baseline
+table still include card-history features, which the simulator resets each
+pass. After the drill they caused a false alarm, so the alert now counts
+population features only (see the incident in ADR-0015).*
+
+**2. The model suffers, and it shows.** On the model dashboard, precision and
+recall against the simulator's ground truth fall as the new fraud arrives, and
+the flagged share moves inside its 24-hour band. Scoring latency stays flat
+(about 17 ms p50, 25 ms p99), and no payment is left undecided.
+
+![Grafana, Fraud / model dashboard during the drill: score heatmap, flagged share against its band, decisions per minute, model latency, precision and recall against simulator truth](docs/img/grafana-fraud-model.png)
+
+**3. Retraining, gated.** Every 30 minutes a CronJob asks Prometheus whether
+the drift alert is firing. At 08:00 it retrained on labelled live payments
+(delayed chargebacks and confirmations), and the gate **rejected** the result:
+version 5, PR-AUC 0.44, below the floor. That exposed a real flaw in how live
+data was split; it was fixed, and at 10:00 the next run trained version 6,
+which the gate promoted (PR-AUC 0.42 to 0.64 on held-out live cards). The
+retrain Job then rolled the KServe predictor to it, and the API switched to
+version 6 and its own decision thresholds. Every gate verdict is recorded on
+the version:
+
+![MLflow model registry, fraud-detector versions 7, 6 and 5 with tags: retrain trigger, gate outcome (promoted or rejected), gate reason, recommended thresholds](docs/img/mlflow-registry.png)
+
+*Times in this capture are US Pacific. Version 7 is the false-alarm promotion
+described in ADR-0015; version 2, the original champion, is serving again.*
+
+**4. Everything is declared in Git.** Argo CD owns every object in the
+namespace: the API and simulator Deployments, the KServe InferenceService and
+serving runtime, the retrain CronJob and its narrowly scoped Role, the
+PrometheusRule, ServiceMonitors and the Grafana dashboards themselves.
+
+![Argo CD resource tree of the payments-fraud-detection application: Deployments, retrain CronJob and its Jobs, InferenceService, ServingRuntime, PodMonitor, PrometheusRule, Role and RoleBinding, ConfigMaps, Services, ServiceMonitors](docs/img/argocd-app-tree.png)
+
+**5. Back to normal.** The drift commit was reverted, and the previous
+champion was put back with the rollback runbook in 18 seconds
+(`docs/runbooks/rollback-model.md`). What the drill got wrong, and what was
+changed because of it, is written up in
+[ADR-0015](docs/adr/0015-automated-retraining.md).
+
+Run the same tour against the live cluster with `scripts/demo.sh`.
 
 ## Repository layout
 
