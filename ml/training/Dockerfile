@@ -31,6 +31,7 @@ ENV PATH=/app/.venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     HOME=/tmp \
     MLFLOW_DISABLE_AGENT_HINT=1 \
+    GIT_PYTHON_REFRESH=quiet \
     GIT_SHA=$GIT_SHA
 LABEL org.opencontainers.image.revision=$GIT_SHA
 WORKDIR /app

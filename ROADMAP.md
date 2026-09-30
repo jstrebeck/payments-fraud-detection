@@ -5,7 +5,7 @@ and keep the "Current phase" pointer accurate. Items marked **(homelab)** are
 built in the `Homelab-Configuration` repo, and are listed here only so the
 dependency is visible.
 
-**Current phase:** 5
+**Current phase:** 6 (Phase 5 waits only on the self-hosted runner; deploys are manual until then)
 
 ## Phase 0: Scaffold and design
 
@@ -124,18 +124,38 @@ scrapes payments-api, simulator and the predictor, with scorer latency p50
 
 ## Phase 5: CI/CD and GitOps
 
-- [ ] GitHub Actions on the self-hosted runner: lint, test, build images,
-      push to `192.168.2.203:5000` tagged with the git SHA
-- [ ] Workflow updates the image tag in `deploy/overlays/homelab` (commit back
-      or Kustomize `images:` edit) on merge to `main`
-- [ ] **(homelab)** Argo CD installed, `Application` CR pointing at this
-      repo's `deploy/overlays/homelab`
-- [ ] Training as a Kubernetes `Job` image; `train.yml` workflow triggers it
-      (workflow_dispatch and weekly schedule)
-- [ ] `docs/ci-cd.md` matches reality
+> **Runner offline, deploys are manual.** Everything below is built, and the
+> manual path is verified on the cluster, but the self-hosted runner on the
+> `ghactions` VM is not registered yet. `build-push.yml` and `train.yml` are
+> skipped (gated on the `SELF_HOSTED_RUNNER` variable) until it is. Meanwhile
+> `make release` and `make train-cluster` run the same scripts by hand. See
+> [docs/ci-cd.md](docs/ci-cd.md#enabling-the-runner).
+
+- [x] GitHub Actions on the self-hosted runner: lint, test, build images,
+      push to `192.168.2.203:5000` tagged with the git SHA (`ci.yml` on
+      GitHub-hosted runners for lint/test/render/builds; `build-push.yml` on the
+      self-hosted runner for pushes, **skipped until the runner is registered**)
+- [x] Workflow updates the image tag in `deploy/overlays/homelab` on merge to
+      `main` (`scripts/release.sh`, committed by the bot with `[skip ci]`; by
+      hand with `make release` for now)
+- [x] **(homelab)** Argo CD installed, `Application` CR pointing at this
+      repo's `deploy/overlays/homelab` (automated sync, prune, self-heal)
+- [x] Training as a Kubernetes `Job` image (`ml/training/Dockerfile`,
+      `deploy/jobs/train.yaml`); `train.yml` workflow triggers it
+      (workflow_dispatch and weekly schedule; **skipped until the runner is
+      registered**, `make train-cluster` meanwhile)
+- [x] `docs/ci-cd.md` matches reality
+- [ ] **(homelab)** Register the Actions runner on `ghactions` (label
+      `homelab`), trust the registry in its Docker daemon, add the
+      `KUBECONFIG_FRAUD` secret, set `SELF_HOSTED_RUNNER=true`. Deferred.
 
 Done when: a merged PR results in a new API image running in the cluster with
 no manual steps, and a training run can be triggered from GitHub.
+**Status 2026-09-30:** met except for the runner. Verified by hand: `make
+release` pushed `5a4d8c3` images and committed the tag bump, Argo CD rolled it
+out without intervention, and `make smoke-cluster` passed. `make
+train-cluster` ran a Job that registered `fraud-detector` v4. With the runner
+registered, both steps run from GitHub unchanged.
 
 ## Phase 6: Observability
 
