@@ -1,0 +1,83 @@
+# Training run in the cluster (ADR-0007). Not part of the Kustomize base:
+# Argo CD does not sync it. Created per run with a unique name by
+# .github/workflows/train.yml or `make train-cluster`, which substitute
+# TRAINER_IMAGE and the run parameters:
+#
+#   sed -e "s#TRAINER_IMAGE#<image>#" ... deploy/jobs/train.yaml | kubectl create -f -
+#
+# Generates the synthetic dataset into an emptyDir, then trains, evaluates,
+# logs to the homelab MLflow and registers a new fraud-detector version.
+# Promotion is a separate step (scripts/promote.py), because it also rolls
+# the predictor.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: train-
+  namespace: fraud
+  labels:
+    app.kubernetes.io/name: trainer
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trainer
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: trainer
+          image: TRAINER_IMAGE
+          command: ["sh", "-c"]
+          args:
+            - >-
+              python -m ml.data generate --seed "$SEED" --customers "$CUSTOMERS"
+              --days "$DAYS" --out "$DATA_URI"
+              && exec python -m ml.training
+          env:
+            - name: SEED
+              value: "TRAIN_SEED"
+            - name: CUSTOMERS
+              value: "TRAIN_CUSTOMERS"
+            - name: DAYS
+              value: "TRAIN_DAYS"
+            - name: DATA_URI
+              value: /data/transactions.parquet
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow.mlops.svc
+            # Cluster runs are the record; laptop runs use fraud-detector-dev (ADR-0012).
+            - name: MLFLOW_EXPERIMENT_NAME
+              value: fraud-detector
+            - name: MODEL_NAME
+              value: fraud-detector
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

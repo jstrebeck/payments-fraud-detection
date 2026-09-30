@@ -1,0 +1,4 @@
+self-hosted-runner:
+  # Label of the ghactions VM runner (docs/ci-cd.md).
+  labels:
+    - homelab

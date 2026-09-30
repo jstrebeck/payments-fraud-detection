@@ -71,13 +71,19 @@ in the consumer's namespace.
 
 ### Phase 5
 
-7. **Argo CD** (namespace `argocd`). One `AppProject` `fraud` and one
-   `Application` with `source.repoURL` = this repo,
-   `path: deploy/overlays/homelab`, `destination.namespace: fraud`,
-   automated sync with prune and self-heal.
-8. **Runner VM**: Docker daemon with `192.168.2.203:5000` in
-   `insecure-registries`; `kubectl` context is *not* required if Argo CD
-   does the deploying.
+7. **Argo CD**. Done: Argo CD v3.5.3 (`Kubernetes/argocd`, UI
+   `http://192.168.2.217`), app of apps. `AppProject` `fraud` (this repo,
+   namespace `fraud`) and `Application` `payments-fraud-detection`
+   (`deploy/overlays/homelab` on `main`, automated sync, prune, self-heal).
+   The `fraud` namespace, payments Postgres and the MLflow storage
+   initializer are platform apps.
+8. **Runner VM**. **Pending, intentionally deferred:** register the Actions
+   runner on `ghactions` for this repo with label `homelab`, add
+   `192.168.2.203:5000` to Docker's `insecure-registries`, and create the
+   `KUBECONFIG_FRAUD` secret (a ServiceAccount allowed to create Jobs and
+   read logs in `fraud`, and to patch the `InferenceService`). Until then
+   deploys are manual (`make release`, `make train-cluster`); see
+   `docs/ci-cd.md`.
 
 ## Endpoints this repo's config will reference
 

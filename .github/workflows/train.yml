@@ -1,0 +1,83 @@
+name: train
+
+# Train in the cluster: a Kubernetes Job generates the synthetic dataset,
+# trains, evaluates, logs to MLflow and registers a new fraud-detector
+# version (ADR-0007). Optionally runs the promotion gate afterwards, which
+# also rolls the predictor (ADR-0006). Same script as `make train-cluster`.
+#
+# Needs the self-hosted runner (registry and cluster access) and the
+# KUBECONFIG_FRAUD secret (a kubeconfig scoped to namespace fraud). The job is
+# skipped unless the repository variable SELF_HOSTED_RUNNER is "true"; while it
+# is not, run `make train-cluster` by hand (docs/ci-cd.md).
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: Generator seed (blank = time-based)
+        required: false
+      customers:
+        description: Synthetic customers
+        default: "5000"
+      days:
+        description: Days of history
+        default: "90"
+      promote:
+        description: Run the promotion gate after training (moves champion only on a win)
+        type: boolean
+        default: false
+  schedule:
+    - cron: "0 6 * * 1"  # Mondays 06:00 UTC; trains, never promotes
+
+permissions:
+  contents: read
+
+concurrency:
+  group: train
+  cancel-in-progress: false
+
+env:
+  MLFLOW_TRACKING_URI: http://192.168.2.202
+
+jobs:
+  train:
+    name: training job
+    if: vars.SELF_HOSTED_RUNNER == 'true'
+    runs-on: [self-hosted, linux, homelab]
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: kubeconfig
+        run: |
+          mkdir -p "$RUNNER_TEMP/kube"
+          printf '%s' "$KUBECONFIG_FRAUD" > "$RUNNER_TEMP/kube/config"
+          echo "KUBECONFIG=$RUNNER_TEMP/kube/config" >> "$GITHUB_ENV"
+        env:
+          KUBECONFIG_FRAUD: ${{ secrets.KUBECONFIG_FRAUD }}
+
+      - name: Run the training Job
+        id: train
+        run: scripts/train-cluster.sh
+        env:
+          SEED: ${{ inputs.seed }}
+          CUSTOMERS: ${{ inputs.customers || '5000' }}
+          DAYS: ${{ inputs.days || '90' }}
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        if: inputs.promote
+        with:
+          version: "0.12.19"
+          python-version: "3.12"
+
+      - name: Promotion gate (and predictor rollout on a win)
+        if: inputs.promote
+        run: |
+          uv sync --locked --package ml --extra train
+          uv run python scripts/promote.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "Training Job \`${{ steps.train.outputs.job }}\` in namespace fraud." >> "$GITHUB_STEP_SUMMARY"
+          echo "Runs: $MLFLOW_TRACKING_URI (experiment fraud-detector)" >> "$GITHUB_STEP_SUMMARY"

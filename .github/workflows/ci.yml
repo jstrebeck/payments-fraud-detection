@@ -70,3 +70,4 @@ jobs:
       - run: docker compose config --quiet
       - run: docker build -f services/payments-api/Dockerfile -t payments-api:ci .
       - run: docker build -f services/simulator/Dockerfile -t simulator:ci .
+      - run: docker build -f ml/training/Dockerfile -t trainer:ci .

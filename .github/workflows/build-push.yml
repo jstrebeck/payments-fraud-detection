@@ -1,0 +1,53 @@
+name: build-push
+
+# After CI passes on main: build and push this commit's images to the homelab
+# registry, pin them in deploy/overlays/homelab, and commit that. Argo CD
+# deploys the commit (ADR-0008). Same script as `make release`.
+#
+# Needs the self-hosted runner (LAN access to 192.168.2.203:5000). The job is
+# skipped unless the repository variable SELF_HOSTED_RUNNER is "true"; while it
+# is not, release by hand with `make release` (docs/ci-cd.md).
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-push
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: build, push, pin tags
+    if: >-
+      vars.SELF_HOSTED_RUNNER == 'true' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: [self-hosted, linux, homelab]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Build exactly the commit CI tested.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Build and push images, pin them in the overlay
+        run: scripts/release.sh
+
+      - name: Commit the tag bump
+        run: |
+          sha=$(git rev-parse --short HEAD)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/overlays/homelab/kustomization.yaml
+          git commit -m "chore(deploy): images ${sha} [skip ci]"
+          # main may have moved while we built; replay the one-line bump on top.
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
+          echo "Pinned \`${sha}\` in \`deploy/overlays/homelab\`; Argo CD rolls it out." >> "$GITHUB_STEP_SUMMARY"

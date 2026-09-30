@@ -24,7 +24,8 @@ export MLFLOW_TRACKING_URI
 export MLFLOW_DISABLE_AGENT_HINT := 1
 
 .PHONY: help install lint fmt typecheck test check dev dev-mlflow down clean-dev logs psql \
-        generate train promote simulate api build push smoke smoke-cluster serving-image manifests
+        generate train promote simulate api build push smoke smoke-cluster serving-image manifests \
+        release train-cluster
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -121,6 +122,19 @@ build: ## Build images tagged with the git SHA
 
 push: build ## Push images to the homelab registry
 	for img in $(IMAGES); do docker push $(REGISTRY)/$$img:$(GIT_SHA); done
+
+## --- Delivery (docs/ci-cd.md) ----------------------------------------------
+# CI runs these same scripts on the self-hosted runner. While the runner is
+# offline, run them by hand; Argo CD deploys whatever the overlay pins.
+
+release: ## Build+push images for HEAD, pin them in the homelab overlay, commit and push
+	scripts/release.sh
+	git add deploy/overlays/homelab/kustomization.yaml
+	git commit -m "chore(deploy): images $$(git rev-parse --short HEAD) [skip ci]"
+	git push
+
+train-cluster: ## Run a training Job in the cluster (SEED=, CUSTOMERS=, DAYS=); registers, does not promote
+	scripts/train-cluster.sh
 
 serving-image: ## Build and push the KServe serving runtime (ml/serving, ADR-0014)
 	docker build -f ml/serving/Dockerfile -t $(REGISTRY)/serving:$(SERVING_TAG) ml/serving

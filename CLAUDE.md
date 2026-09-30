@@ -97,7 +97,13 @@ Details and IPs in `docs/homelab-integration.md`. Summary:
 - KServe `v0.20.0` (Standard mode, no ingress) with cert-manager for its
   webhook. Namespace `fraud` has `kserve-sa`, `s3-credentials`, and Postgres
   at `payments-postgres.fraud.svc:5432` (Secret `payments-db`).
-- Not yet present: Argo CD.
+- Argo CD (homelab repo, `Kubernetes/argocd`) deploys `deploy/overlays/homelab`
+  from `main`. Image tags there are the deploy; change them with
+  `make release`, not by hand.
+- The self-hosted GitHub Actions runner is **not registered**:
+  `build-push.yml` and `train.yml` are skipped (`SELF_HOSTED_RUNNER` variable),
+  so deploys and cluster training are manual (`make release`,
+  `make train-cluster`). See `docs/ci-cd.md`.
 
 ## Things not to do
 

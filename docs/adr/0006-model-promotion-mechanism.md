@@ -57,11 +57,11 @@ Option 1.
   API's `fraud_model_version_info` metric.
 - Promotion and rollback take one command and about a minute (see
   `docs/runbooks/rollback-model.md`).
-- The annotation is a field Argo CD does not know about. From Phase 5 the
-  `Application` must ignore
-  `/spec/predictor/annotations/fraud-detection~1model-version` on the
-  InferenceService, or self-heal would strip it (harmless, but it causes an
-  extra rollout).
+- The annotation is not declared in Git, so Argo CD (Phase 5) leaves it
+  alone: its diff only covers fields the manifests set. Verified on the
+  cluster with self-heal on. If `inferenceservice.yaml` ever declares
+  `spec.predictor.annotations`, add an `ignoreDifferences` entry for
+  `/spec/predictor/annotations/fraud-detection~1model-version`.
 - Any predictor pod that starts for another reason (node drain, HPA scale
   up) resolves the alias at that moment. If the alias moved without a
   rollout, replicas can briefly serve different versions. The API records

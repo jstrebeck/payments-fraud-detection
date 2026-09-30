@@ -15,17 +15,24 @@ deploy/
     podmonitor-fraud-detector.yaml   scrapes MLServer metrics (:8082) on the predictor pods
   overlays/
     homelab/
-      kustomization.yaml             image tags (git SHAs; bumped by CI from Phase 5)
+      kustomization.yaml             image tags (git SHAs; set by scripts/release.sh)
     local/
       README.md                      not implemented; compose is the local path
+  jobs/
+    train.yaml                       training Job template; created per run by scripts/train-cluster.sh,
+                                     not in the base, so Argo CD never syncs it
 ```
 
 Planned: an HPA for payments-api (Phase 4+ if load needs it),
 `prometheusrules.yaml` and a dashboards ConfigMap (Phase 6), and `jobs/`
-for training and retraining (Phases 5 and 7).
+for retraining and drift (Phase 7).
 
-Apply by hand until Argo CD arrives (Phase 5):
-`kubectl apply -k deploy/overlays/homelab`, then `make smoke-cluster`.
+**Deploying:** Argo CD (homelab repo, app `payments-fraud-detection`) syncs
+`overlays/homelab` from `main` with prune and self-heal, so a merged change to
+this directory is live within minutes, and `kubectl apply` by hand gets
+reverted. New code reaches the cluster when `make release` (or, once the
+runner is online, `build-push.yml`) pins new image tags here. Check with
+`make smoke-cluster`.
 
 ## Rules
 

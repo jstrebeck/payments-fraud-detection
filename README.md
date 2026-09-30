@@ -1,12 +1,15 @@
 # Payments Fraud Detection
 
+[![ci](https://github.com/jstrebeck/payments-fraud-detection/actions/workflows/ci.yml/badge.svg)](https://github.com/jstrebeck/payments-fraud-detection/actions/workflows/ci.yml)
+
 An end-to-end MLOps showcase: a synthetic payments platform that scores every
 transaction for fraud in real time, with the full lifecycle of the model
 (training, tracking, registry, serving, monitoring, retraining) automated and
 running on a self-hosted Kubernetes homelab.
 
 **Author:** Josh Strebeck ([@jstrebeck](https://github.com/jstrebeck))
-**Status:** Phase 2 complete: models are trained, gated and registered in MLflow, and the API scores with the promoted `champion`. Next: Phase 3, the homelab ML platform. See [ROADMAP.md](ROADMAP.md).
+**Status:** Phases 0 to 5 in place. The API runs in the homelab and scores every payment with the `champion` model served by KServe, deployed by Argo CD from `deploy/overlays/homelab`. Next: Phase 6, observability. See [ROADMAP.md](ROADMAP.md).
+**Note:** the self-hosted GitHub Actions runner is offline for now, so the image build/push and cluster-training workflows are skipped and deploys are run by hand (`make release`, `make train-cluster`). Details in [docs/ci-cd.md](docs/ci-cd.md).
 **License:** [MIT](LICENSE)
 
 ## What this demonstrates
