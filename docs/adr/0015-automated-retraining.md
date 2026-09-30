@@ -113,3 +113,35 @@ Until then, when traffic returns to normal after a drift promotion, roll back
 with `docs/runbooks/rollback-model.md` (done at the end of the drill: v2 was
 serving again 18 seconds later).
 
+## Incident: a false drift alarm promoted a worse model (2026-09-30)
+
+After the drill the traffic was back to normal and v2 was serving again, yet
+`FraudFeatureDrift` fired on and off from 10:15 to 18:00 and the 18:00 run
+promoted v7 (gate: PR-AUC 0.77 -> 0.82 over held-out cards from 7 days). On
+fresh normal traffic v7 is worse than v2 (PR-AUC 0.84 vs 0.91). Two causes:
+
+- **The alert counted card-history features** (`txn_count_7d`,
+  `amount_sum_7d`, `is_new_*`, distance and speed from the last payment).
+  The simulator starts each pass with fresh cards, so these swing with its
+  replay cycle, and a 24h-median baseline that was only hours old (and partly
+  drift) could not absorb that. With 500 customers per pass, pass-to-pass
+  noise also moved `ip_billing_mismatch`.
+- **The gate tested on 7 days of held-out labels**, which still held the
+  drift period, so a drift-fitted challenger won against a champion that is
+  better on today's traffic.
+
+Fixes:
+
+- `fraud:feature_psi:drifting` only counts population features (amount,
+  log_amount, channel, merchant category and risk tier, IP/billing mismatch);
+  the history features stay on the dashboard. Replayed over the day's
+  Prometheus data, the new rule is true from 07:40 to 10:15 (the drift) and
+  never after.
+- The simulator's world grew from 500 to 2,000 customers (passes of ~8.5h
+  instead of ~2h).
+- The gate's test set is held-out cards from the last 6 hours
+  (`LIVE_TEST_WINDOW_HOURS`). On the real labels: at 18:00 v2 beats v7 there
+  (0.944 vs 0.914, so v7 would have been rejected); at 10:00, during the
+  drift, v6 still beats v2 (0.621 vs 0.373).
+- v2 was put back with the rollback runbook.
+

@@ -113,7 +113,7 @@ def _base(n: int) -> Dataset:
 def test_split_is_by_card_and_base_only_trains() -> None:
     frame = _frame(400)
     live, cards = live_dataset(frame), list(frame["card_token"])
-    split = retrain_split(_base(50), live, cards, settings())
+    split = retrain_split(_base(50), live, cards, settings(live_test_window_hours=24))
     assert len(split.train) + len(split.valid) + len(split.test) == 50 + 400
 
     # Each live row's features encode its row index, which maps back to its card.
@@ -195,3 +195,16 @@ def test_rollout_times_out() -> None:
     api = FakeApi([_deployment("2", 1, 1, 1)])
     with pytest.raises(RolloutError):
         rollout(api, "fraud", "fraud-detector", "3", timeout_s=0.01, poll_s=0)  # type: ignore[arg-type]
+
+
+def test_gate_only_tests_on_recent_held_out_cards() -> None:
+    frame = _frame(400)  # one row a minute, so the last 6h is the newest 360 rows
+    live, cards = live_dataset(frame), list(frame["card_token"])
+    split = retrain_split(_base(50), live, cards, settings(live_test_window_hours=1))
+    newest = frame["created_at"].max()
+    assert (pd.to_datetime(split.test.timestamp, utc=True) >= newest - timedelta(hours=1)).all()
+    # Old held-out rows are neither tested nor trained on.
+    test_cards = {cards[int(i)] for i in split.test.features.iloc[:, 0]}
+    train_cards = {cards[int(i)] for i in split.train.features.iloc[50:, 0]}
+    assert not test_cards & train_cards
+    assert len(split.train) + len(split.valid) + len(split.test) < 50 + 400

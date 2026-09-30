@@ -21,6 +21,10 @@
    (A time split, newest labels as the test window, was tried first: shortly
    after drift began the drifted labels were all in validation and test and the
    challenger never trained on them.)
+   The test set is further limited to held-out cards scored in the last
+   `LIVE_TEST_WINDOW_HOURS` (6): after a drift ends, older drifted labels would
+   otherwise let a drift-fitted challenger beat a champion that is better on
+   today's traffic (this happened once, see ADR-0015).
 4. **Train, gate, promote.** The same code as `make train` (`train_on_split`),
    with the gate. On a win, `champion` moves and the Job rolls the predictor
    (ml.evaluation.rollout). The new version carries its recommended decision
@@ -83,6 +87,10 @@ class RetrainSettings(BaseSettings):
     min_valid_fraud: int = Field(default=10, ge=1)
     live_test_fraction: float = Field(default=0.2, gt=0, lt=0.5)
     live_valid_fraction: float = Field(default=0.2, gt=0, lt=0.5)
+    # The gate's test set: held-out cards scored in this many most recent hours.
+    # Older held-out rows are left out, so labels from a drift that has ended
+    # cannot win the gate for a model fitted to it.
+    live_test_window_hours: float = Field(default=6.0, gt=0)
     base_customers: int = Field(default=1000, ge=1)
     base_days: int = Field(default=30, ge=1)
     base_seed: int | None = None  # default: time-based, logged
@@ -217,8 +225,13 @@ def retrain_split(
     if n < settings.min_labelled:
         raise NotEnoughLabelsError(f"{n} labelled payments, need {settings.min_labelled}")
     bucket = np.array([card_bucket(c) for c in cards])
-    in_test = bucket >= 1 - settings.live_test_fraction
-    in_valid = (bucket >= 1 - settings.live_test_fraction - settings.live_valid_fraction) & ~in_test
+    held_out = bucket >= 1 - settings.live_test_fraction
+    in_valid = (
+        bucket >= 1 - settings.live_test_fraction - settings.live_valid_fraction
+    ) & ~held_out
+    ts = pd.to_datetime(live.timestamp, utc=True)
+    recent = (ts >= ts.max() - pd.Timedelta(hours=settings.live_test_window_hours)).to_numpy()
+    in_test = held_out & recent  # older held-out rows are used nowhere
     test, valid = live.take(in_test), live.take(in_valid)
     if int(test.label.sum()) < settings.min_test_fraud:
         raise NotEnoughLabelsError(
@@ -229,7 +242,7 @@ def retrain_split(
         raise NotEnoughLabelsError(
             f"{int(valid.label.sum())} fraud labels to validate, need {settings.min_valid_fraud}"
         )
-    train = _concat(base, live.take(~in_test & ~in_valid))
+    train = _concat(base, live.take(~held_out & ~in_valid))
     return Split(
         train=train,
         valid=valid,
@@ -323,6 +336,7 @@ def main() -> int:
             "retrain.split": "by card",
             "retrain.live_test_fraction": settings.live_test_fraction,
             "retrain.live_valid_fraction": settings.live_valid_fraction,
+            "retrain.live_test_window_hours": settings.live_test_window_hours,
         },
         extra_tags={"retrain": "true", "retrain_trigger": decision.trigger},
     )

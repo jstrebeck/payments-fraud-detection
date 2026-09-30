@@ -41,8 +41,9 @@ the checks). Then:
   feature vectors the API stored at scoring time and the delayed labels
   (`label`, `label_reason` = fraud pattern).
 - **Split:** by card (hash of the card token): `LIVE_TEST_FRACTION` (0.2)
-  of cards test, `LIVE_VALID_FRACTION` (0.2) validate, the rest plus the
-  history trains, so drifted traffic reaches training immediately and one
+  of cards test (only their payments from the last `LIVE_TEST_WINDOW_HOURS`,
+  6, so the gate reflects today's traffic), `LIVE_VALID_FRACTION` (0.2)
+  validate, the rest plus the history trains, so drifted traffic reaches training immediately and one
   card's fraud incident never straddles train and test. Fewer than
   `MIN_LABELLED` (1000) labels or `MIN_TEST_FRAUD` (50) frauds in the test
   cards is a skip.

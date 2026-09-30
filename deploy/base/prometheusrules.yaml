@@ -156,11 +156,19 @@ spec:
         # training world), so drift is judged against this baseline, not 0.
         - record: fraud:feature_psi:baseline_24h
           expr: quantile_over_time(0.5, fraud:feature_psi:max[24h] offset 1h)
-        # Features that are both shifted (PSI > 0.25) and well above their usual level.
+        # Population features that are both shifted (PSI > 0.25) and well above
+        # their usual level. Card-history features (txn_count_*, amount_sum_*,
+        # is_new_*, amount_zscore, seconds_since_last, km/speed_from_last) are left
+        # out: the simulator starts every pass with fresh cards, so they swing
+        # with its replay cycle, which caused a false alarm (and an unwanted
+        # retrain) after the Phase 7 drill. They stay on the drift dashboard.
         - record: fraud:feature_psi:drifting
           expr: |
-            fraud:feature_psi:max > 0.25
-              and fraud:feature_psi:max > 2 * fraud:feature_psi:baseline_24h
+            (
+              fraud:feature_psi:max > 0.25
+                and fraud:feature_psi:max > 2 * fraud:feature_psi:baseline_24h
+            )
+            and on(feature) fraud:feature_psi:max{feature=~"amount|log_amount|channel_code|merchant_category_code|merchant_risk_tier|ip_billing_mismatch"}
 
         - alert: FraudFeatureDrift
           # Two or more features drifting, or one far out. PSI is only exported

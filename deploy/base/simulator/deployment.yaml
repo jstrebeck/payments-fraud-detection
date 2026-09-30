@@ -1,7 +1,8 @@
 # Steady synthetic traffic against the in-cluster API. `--seed auto` derives the
 # seed from the clock, so a restarted pod sends new transaction IDs instead of
 # replaying stored decisions; `--loop` moves to seed+1 when a pass ends
-# (~11k transactions, about two hours at 1.5 rps).
+# (2,000 customers x 14 days: ~46k transactions, about 8.5 hours at 1.5 rps; a
+# world that size keeps pass-to-pass noise in the drift monitor low).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -37,7 +38,7 @@ spec:
             - --loop
             - --rps=1.5
             - --concurrency=4
-            - --customers=500
+            - --customers=2000
             - --days=14
             - --metrics-port=9100
             # Delayed labels (Phase 7): every fraud is charged back and 20% of
@@ -60,10 +61,10 @@ spec:
           resources:
             requests:
               cpu: 50m
-              memory: 192Mi
+              memory: 384Mi
             limits:
               cpu: 500m
-              memory: 384Mi
+              memory: 768Mi  # generating a 2,000-customer pass peaks near 280Mi
           livenessProbe:
             httpGet:
               path: /metrics
