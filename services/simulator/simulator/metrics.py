@@ -11,3 +11,8 @@ DECISIONS = Counter(
     "API decisions against generator ground truth",
     ["decision", "truth"],
 )
+FEEDBACK = Counter(
+    "fraud_sim_feedback",
+    "Delayed labels, by label and outcome (scheduled, sent, error, dropped)",
+    ["label", "outcome"],
+)

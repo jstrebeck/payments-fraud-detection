@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ml.data.drift import DRIFT_PROFILES
 from ml.data.generator import GeneratorConfig, generate
 from ml.data.io import iter_transactions, write_parquet
 from ml.data.schema import LABEL_FIELDS
@@ -25,6 +26,9 @@ def _add_generator_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--days", type=int, default=d.days)
     p.add_argument("--fraud-rate", type=float, default=d.fraud_rate)
     p.add_argument("--start", type=_parse_start, default=d.start, help="ISO date, UTC if naive")
+    p.add_argument(
+        "--drift", choices=sorted(DRIFT_PROFILES), default=d.drift, help="ml/data/drift.py"
+    )
 
 
 def _config(args: argparse.Namespace) -> GeneratorConfig:
@@ -34,6 +38,7 @@ def _config(args: argparse.Namespace) -> GeneratorConfig:
         days=args.days,
         fraud_rate=args.fraud_rate,
         start=args.start,
+        drift=args.drift,
     )
 
 

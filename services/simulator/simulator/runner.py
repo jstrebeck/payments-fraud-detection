@@ -20,6 +20,7 @@ import structlog
 
 from ml.data.schema import LabelledTransaction
 from simulator import metrics
+from simulator.feedback import FeedbackScheduler
 
 log = structlog.get_logger(__name__)
 
@@ -33,6 +34,9 @@ class RunConfig:
     concurrency: int = 8
     duration_s: float | None = None
     limit: int | None = None
+    # With feedback: when the stream ends, wait for pending labels instead of
+    # dropping them (they can be minutes out).
+    wait_for_feedback: bool = False
 
 
 @dataclass
@@ -78,6 +82,7 @@ async def run(
     transactions: Iterable[LabelledTransaction],
     client: httpx.AsyncClient,
     config: RunConfig,
+    feedback: FeedbackScheduler | None = None,
 ) -> RunStats:
     stats = RunStats()
     queues: list[asyncio.Queue[LabelledTransaction | None]] = [
@@ -86,8 +91,12 @@ async def run(
 
     async def worker(queue: asyncio.Queue[LabelledTransaction | None]) -> None:
         while (txn := await queue.get()) is not None:
-            await _send(client, txn, stats)
+            await _send(client, txn, stats, feedback)
 
+    stop_feedback = asyncio.Event()
+    feedback_task = (
+        asyncio.create_task(feedback.run(client, stop_feedback)) if feedback is not None else None
+    )
     workers = [asyncio.create_task(worker(q)) for q in queues]
     started = time.monotonic()
     interval = 1.0 / config.rps if config.rps > 0 else 0.0
@@ -108,10 +117,22 @@ async def run(
         for q in queues:
             await q.put(None)
         await asyncio.gather(*workers)
+        if feedback is not None and feedback_task is not None:
+            stop_feedback.set()
+            await feedback_task
+            if config.wait_for_feedback:
+                await feedback.drain(client)
+            elif len(feedback):
+                log.info("feedback_pending_lost", pending=len(feedback))
     return stats
 
 
-async def _send(client: httpx.AsyncClient, txn: LabelledTransaction, stats: RunStats) -> None:
+async def _send(
+    client: httpx.AsyncClient,
+    txn: LabelledTransaction,
+    stats: RunStats,
+    feedback: FeedbackScheduler | None = None,
+) -> None:
     body = txn.unlabelled().model_dump(mode="json")
     # Correlation ID for this payment: the API logs it, forwards it to the
     # predictor and stores it on the payment row (docs/runbooks/trace-a-payment.md).
@@ -133,7 +154,10 @@ async def _send(client: httpx.AsyncClient, txn: LabelledTransaction, stats: RunS
     finally:
         metrics.LATENCY.observe(time.perf_counter() - start)
     stats.sent += 1
-    decision = resp.json()["decision"]
+    payload = resp.json()
+    decision = payload["decision"]
+    if feedback is not None:
+        feedback.offer(payload["payment_id"], is_fraud=txn.is_fraud, pattern=txn.fraud_pattern)
     stats.record(decision, txn.is_fraud)
     metrics.REQUESTS.labels("ok").inc()
     truth = "fraud" if txn.is_fraud else "legit"

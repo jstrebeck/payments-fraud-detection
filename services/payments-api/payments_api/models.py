@@ -5,7 +5,18 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, Float, Index, MetaData, Numeric, String, Uuid, func
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    Float,
+    Index,
+    MetaData,
+    Numeric,
+    String,
+    Uuid,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -30,7 +41,17 @@ class Payment(Base):
     """
 
     __tablename__ = "payments"
-    __table_args__ = (Index("ix_payments_card_token_timestamp", "card_token", "timestamp"),)
+    __table_args__ = (
+        Index("ix_payments_card_token_timestamp", "card_token", "timestamp"),
+        # Retraining reads labelled rows newest first; partial, so unlabelled
+        # traffic (most of it) costs nothing.
+        Index(
+            "ix_payments_labelled_created_at",
+            "created_at",
+            postgresql_where=text("label IS NOT NULL"),
+            sqlite_where=text("label IS NOT NULL"),
+        ),
+    )
 
     payment_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     transaction_id: Mapped[str] = mapped_column(String(64), unique=True)
@@ -58,6 +79,13 @@ class Payment(Base):
     # payment be followed through simulator, API and predictor logs.
     request_id: Mapped[str | None] = mapped_column(String(64), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # Delayed ground truth (Phase 7): a chargeback ("fraud") or a confirmation
+    # ("legit") posted later to /payments/{id}/feedback. Last write wins.
+    label: Mapped[str | None] = mapped_column(String(8))
+    label_reason: Mapped[str | None] = mapped_column(String(32))
+    label_source: Mapped[str | None] = mapped_column(String(32))
+    labelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 def as_utc(ts: datetime) -> datetime:

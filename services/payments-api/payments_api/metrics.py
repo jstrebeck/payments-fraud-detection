@@ -21,6 +21,17 @@ SCORER_FALLBACK = Counter(
 MODEL_VERSION = Gauge(
     "fraud_model_version_info", "Model version currently used for scoring", ["scorer", "version"]
 )
+LABELS = Counter(
+    "fraud_labels",
+    "Delayed labels received, by label and the decision originally made. Precision and "
+    "recall of the served decisions are PromQL over this counter",
+    ["label", "decision"],
+)
+LABEL_DELAY = Histogram(
+    "fraud_label_delay_seconds",
+    "Time from scoring a payment to receiving its label",
+    buckets=[30, 60, 120, 300, 600, 1800, 3600, 6 * 3600, 86400, 7 * 86400, 30 * 86400],
+)
 HTTP_REQUESTS = Counter(
     "fraud_http_requests", "HTTP requests by route and status", ["method", "route", "status"]
 )

@@ -4,7 +4,8 @@ Seeded synthetic generator and the canonical schema (ADR-0003).
 
 | Module | Needs | Contents |
 |---|---|---|
-| `schema.py` | core | `Transaction` (what the API accepts), `LabelledTransaction` (+ `is_fraud`, `fraud_pattern`), `FRAUD_PATTERNS` |
+| `schema.py` | core | `Transaction` (what the API accepts), `LabelledTransaction` (+ `is_fraud`, `fraud_pattern`), `FRAUD_PATTERNS` (in every baseline dataset), `DRIFT_FRAUD_PATTERNS` (drift profiles only) |
+| `drift.py` | core | `DriftProfile`, `DRIFT_PROFILES`, `get_profile`: traffic drift for exercising drift detection and retraining |
 | `reference.py` | core | Fixed countries (with centroids), merchant categories (risk tier, amount profile, channel mix), `distance_km` |
 | `generator.py` | `data` | `GeneratorConfig`, `generate(config) -> pyarrow.Table`, `GENERATOR_VERSION` |
 | `io.py` | `data` | `ARROW_SCHEMA`, `write_parquet`, `read_parquet`, `iter_transactions` |
@@ -52,11 +53,42 @@ fraud), so changing `fraud_rate` leaves legitimate traffic identical.
 Changing output for an existing seed means bumping `GENERATOR_VERSION` and
 updating the golden numbers in `ml/tests/test_generator.py`.
 
+## Drift profiles (`drift.py`, Phase 7)
+
+`GeneratorConfig(drift=...)` / `--drift` on the `ml.data` and simulator
+CLIs. The default `none` is baseline traffic, byte-for-byte what the
+generator produced before profiles existed (the Parquet footer only records
+`drift` when it is not `none`). A profile applies its changes on a separate
+random stream, so it never disturbs the baseline streams.
+
+| Profile | Population shift | Fraud |
+|---|---|---|
+| `none` | none | baseline patterns |
+| `fraud-shift` | every amount x2.5; 60% of legit card-present payments become e-commerce from the home IP | half of incidents are `session_hijack`: 3-5 delivery-style orders (pharmacy, restaurants, grocery online) over one afternoon, hours apart, at merchants new to the customer, on the victim's own device and home IP |
+
+What `fraud-shift` does to a model trained on baseline data (champion
+`fraud-detector` v2; 2,000 customers x 30 days per sample, measured
+2026-09-30):
+
+- PSI against baseline traffic (decile bins): `amount` and `log_amount`
+  0.53, `channel_code` 0.52, `amount_sum_7d` 0.40, `amount_sum_24h` 0.23.
+  Two baseline seeds differ by at most 0.002.
+- Champion recall on fraud, baseline vs `fraud-shift`: 0.975 vs 0.488 at the
+  review threshold (0.019), 0.940 vs 0.424 at the decline threshold (0.138).
+  On `session_hijack` alone: 0.077 and 0.027.
+- Learnable: a LightGBM trained on baseline history plus a small labelled
+  `fraud-shift` slice reaches PR-AUC 0.54 on drifted traffic (champion 0.32),
+  and 0.31 recall on `session_hijack` at 1% FPR (champion 0.01).
+
+`ml/tests/test_drift.py` checks baseline equality, determinism, the price
+and channel shift, and that at least three features pass PSI 0.25.
+
 ## CLI
 
 ```
 uv run python -m ml.data generate --seed 42 --customers 5000 --days 90 --fraud-rate 0.015 --out data/transactions.parquet
 uv run python -m ml.data stream   --seed 42 --customers 50 --days 2 --limit 10   # JSON lines, labels stripped
+uv run python -m ml.data generate --seed 7 --drift fraud-shift --out data/drifted.parquet
 ```
 
 The defaults (5000 customers, 90 days) give about 740k rows in under 20 s.

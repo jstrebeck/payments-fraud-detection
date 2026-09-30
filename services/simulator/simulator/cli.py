@@ -16,9 +16,11 @@ import httpx2 as httpx
 import structlog
 from prometheus_client import start_http_server
 
+from ml.data.drift import DRIFT_PROFILES
 from ml.data.generator import GeneratorConfig, generate
 from ml.data.io import iter_transactions
 from ml.data.schema import LabelledTransaction
+from simulator.feedback import FeedbackConfig, FeedbackScheduler
 from simulator.runner import RunConfig, run
 
 log = structlog.get_logger(__name__)
@@ -89,6 +91,29 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--limit", type=int, default=None, help="stop after N transactions")
     r.add_argument("--timeout", type=float, default=5.0, help="per-request timeout, seconds")
     r.add_argument("--metrics-port", type=int, default=None, help="serve /metrics on this port")
+    r.add_argument(
+        "--drift",
+        choices=sorted(DRIFT_PROFILES),
+        default="none",
+        help="traffic drift profile (ml/data/drift.py); fraud-shift exercises drift detection",
+    )
+    fb = r.add_argument_group("delayed label feedback (POST /payments/{id}/feedback)")
+    fb.add_argument("--no-feedback", action="store_true", help="send no labels")
+    fb.add_argument(
+        "--feedback-delay", type=parse_duration, default=300.0, help="e.g. 5m (+/-20%% jitter)"
+    )
+    fb.add_argument(
+        "--chargeback-rate", type=float, default=1.0, help="share of fraud that is charged back"
+    )
+    fb.add_argument(
+        "--legit-label-rate", type=float, default=0.2, help="share of legit payments confirmed"
+    )
+    fb.add_argument("--feedback-max-pending", type=int, default=50_000)
+    fb.add_argument(
+        "--wait-for-feedback",
+        action="store_true",
+        help="when the stream ends, wait until pending labels are sent",
+    )
     return parser
 
 
@@ -99,16 +124,36 @@ async def _main(args: argparse.Namespace) -> int:
         days=args.days,
         fraud_rate=args.fraud_rate,
         start=args.start,
+        drift=args.drift,
     )
     if args.metrics_port:
         start_http_server(args.metrics_port)
 
     config = RunConfig(
-        rps=args.rps, concurrency=args.concurrency, duration_s=args.duration, limit=args.limit
+        rps=args.rps,
+        concurrency=args.concurrency,
+        duration_s=args.duration,
+        limit=args.limit,
+        wait_for_feedback=args.wait_for_feedback,
+    )
+    feedback = (
+        None
+        if args.no_feedback
+        else FeedbackScheduler(
+            FeedbackConfig(
+                delay_s=args.feedback_delay,
+                chargeback_rate=args.chargeback_rate,
+                legit_label_rate=args.legit_label_rate,
+                max_pending=args.feedback_max_pending,
+            ),
+            seed=args.seed,
+        )
     )
     async with httpx.AsyncClient(base_url=args.api, timeout=args.timeout) as client:
-        stats = await run(stream(gen, loop=args.loop), client, config)
+        stats = await run(stream(gen, loop=args.loop), client, config, feedback)
     print(stats.summary())
+    if feedback is not None:
+        print(feedback.summary())
     return 1 if stats.sent == 0 else 0
 
 

@@ -149,3 +149,82 @@ def test_malformed_request_id_is_replaced(
 def test_migrations_match_the_models(database_url: str) -> None:
     """`alembic check`: the migrated schema has no drift from models.py."""
     command.check(alembic_config(database_url))
+
+
+def _metric(name: str, **labels: str) -> float:
+    from prometheus_client import REGISTRY
+
+    return REGISTRY.get_sample_value(name, labels) or 0.0
+
+
+def test_feedback_labels_a_payment(client: TestClient, make_txn: TxnFactory) -> None:
+    payment = client.post("/payments", json=make_txn()).json()
+    pid, decision = payment["payment_id"], payment["decision"]
+    before = _metric("fraud_labels_total", label="fraud", decision=decision)
+
+    resp = client.post(
+        f"/payments/{pid}/feedback",
+        json={"label": "fraud", "reason": "card_testing", "source": "simulator"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert (body["label"], body["label_reason"], body["label_source"]) == (
+        "fraud",
+        "card_testing",
+        "simulator",
+    )
+    assert body["labelled_at"] is not None
+    assert client.get(f"/payments/{pid}").json()["label"] == "fraud"
+    assert _metric("fraud_labels_total", label="fraud", decision=decision) == before + 1
+
+    # An identical re-post is accepted but not counted again.
+    again = client.post(
+        f"/payments/{pid}/feedback",
+        json={"label": "fraud", "reason": "card_testing", "source": "simulator"},
+    )
+    assert again.status_code == 200
+    assert again.json()["labelled_at"] == body["labelled_at"]
+    assert _metric("fraud_labels_total", label="fraud", decision=decision) == before + 1
+
+
+def test_relabel_last_write_wins(client: TestClient, make_txn: TxnFactory) -> None:
+    pid = client.post("/payments", json=make_txn()).json()["payment_id"]
+    client.post(f"/payments/{pid}/feedback", json={"label": "legit", "source": "simulator"})
+    resp = client.post(
+        f"/payments/{pid}/feedback",
+        json={"label": "fraud", "reason": "account_takeover", "source": "manual"},
+    )
+    assert resp.json()["label"] == "fraud"
+    assert resp.json()["label_source"] == "manual"
+
+
+def test_new_payment_has_no_label(client: TestClient, make_txn: TxnFactory) -> None:
+    pid = client.post("/payments", json=make_txn()).json()["payment_id"]
+    record = client.get(f"/payments/{pid}").json()
+    assert record["label"] is None
+    assert record["labelled_at"] is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"label": "chargeback", "source": "simulator"},
+        {"label": "legit", "reason": "card_testing", "source": "simulator"},
+        {"label": "fraud"},
+        {"label": "fraud", "source": "has spaces"},
+        {"label": "fraud", "source": "simulator", "extra": 1},
+    ],
+)
+def test_invalid_feedback_is_rejected(
+    client: TestClient, make_txn: TxnFactory, body: dict[str, object]
+) -> None:
+    pid = client.post("/payments", json=make_txn()).json()["payment_id"]
+    assert client.post(f"/payments/{pid}/feedback", json=body).status_code == 422
+
+
+def test_feedback_for_unknown_payment_is_404(client: TestClient) -> None:
+    resp = client.post(
+        "/payments/00000000-0000-4000-8000-000000000000/feedback",
+        json={"label": "legit", "source": "simulator"},
+    )
+    assert resp.status_code == 404

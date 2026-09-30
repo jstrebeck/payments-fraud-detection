@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from ml.data.schema import Transaction
-from payments_api.schemas import PaymentDecision, PaymentRecord
+from payments_api.schemas import Feedback, PaymentDecision, PaymentRecord
 from payments_api.service import PaymentService
 
 router = APIRouter()
@@ -38,6 +38,17 @@ async def create_payment(txn: Transaction, response: Response, service: Service)
 @router.get("/payments/{payment_id}")
 async def get_payment(payment_id: uuid.UUID, service: Service) -> PaymentRecord:
     payment = await service.get(payment_id)
+    if payment is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "payment not found")
+    return PaymentRecord.from_row(payment)
+
+
+@router.post("/payments/{payment_id}/feedback")
+async def post_feedback(
+    payment_id: uuid.UUID, feedback: Feedback, service: Service
+) -> PaymentRecord:
+    """Delayed label (chargeback or confirmation) for a scored payment. Last write wins."""
+    payment = await service.record_feedback(payment_id, feedback)
     if payment is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "payment not found")
     return PaymentRecord.from_row(payment)

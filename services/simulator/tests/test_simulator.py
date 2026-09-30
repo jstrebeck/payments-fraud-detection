@@ -12,7 +12,8 @@ from structlog.testing import capture_logs
 from ml.data.generator import GeneratorConfig, generate
 from ml.data.io import iter_transactions
 from ml.data.schema import LabelledTransaction
-from simulator.cli import configure_logging, parse_duration, parse_seed, stream
+from simulator.cli import build_parser, configure_logging, parse_duration, parse_seed, stream
+from simulator.feedback import FeedbackConfig, FeedbackScheduler
 from simulator.runner import RunConfig, RunStats, run, shard
 
 
@@ -167,3 +168,102 @@ def test_request_id_is_logged_for_failures_and_interesting_outcomes() -> None:
         interesting = e["decision"] in {"review", "declined"} or e["truth"] == "fraud"
         assert e["log_level"] == ("info" if interesting else "debug")
         assert e["request_id"] in sent
+
+
+class FeedbackApi(FakeApi):
+    """Also answers POST /payments/{id}/feedback; payment_id is the transaction_id."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.feedback: dict[str, dict[str, object]] = {}
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/feedback"):
+            payment_id = request.url.path.split("/")[2]
+            self.feedback[payment_id] = json.loads(request.content)
+            return httpx.Response(200, json={})
+        body = json.loads(request.content)
+        self.bodies.append(body)
+        return httpx.Response(
+            201, json={"decision": "approved", "payment_id": body["transaction_id"]}
+        )
+
+
+def _run_with_feedback(
+    api: FakeApi,
+    txns: list[LabelledTransaction],
+    config: RunConfig,
+    feedback: FeedbackScheduler,
+) -> RunStats:
+    async def go() -> RunStats:
+        transport = httpx.MockTransport(api)
+        async with httpx.AsyncClient(transport=transport, base_url="http://api") as client:
+            return await run(txns, client, config, feedback)
+
+    return asyncio.run(go())
+
+
+def test_feedback_labels_fraud_and_samples_legit() -> None:
+    txns = _stream()
+    api = FeedbackApi()
+    scheduler = FeedbackScheduler(FeedbackConfig(delay_s=0.0, legit_label_rate=0.5), seed=1)
+    _run_with_feedback(api, txns, RunConfig(rps=0, wait_for_feedback=True), scheduler)
+
+    fraud = {t.transaction_id: t for t in txns if t.is_fraud}
+    legit = [t for t in txns if not t.is_fraud]
+    assert fraud  # the fixture stream has fraud
+    for tid, t in fraud.items():  # chargeback_rate defaults to 1.0
+        assert api.feedback[tid] == {
+            "label": "fraud",
+            "reason": t.fraud_pattern,
+            "source": "simulator",
+        }
+    confirmed = [t for t in legit if t.transaction_id in api.feedback]
+    assert all(api.feedback[t.transaction_id]["label"] == "legit" for t in confirmed)
+    assert all(api.feedback[t.transaction_id]["reason"] is None for t in confirmed)
+    assert 0.35 < len(confirmed) / len(legit) < 0.65
+    assert scheduler.counts["sent"] == len(api.feedback)
+    assert len(scheduler) == 0
+
+
+def test_feedback_sampling_is_seeded() -> None:
+    def labelled(seed: int) -> set[str]:
+        sched = FeedbackScheduler(FeedbackConfig(delay_s=3600, legit_label_rate=0.3), seed=seed)
+        for i in range(200):
+            sched.offer(f"p{i}", is_fraud=False, pattern=None)
+        return {item.payment_id for item in sched._heap}
+
+    assert labelled(7) == labelled(7)
+    assert labelled(7) != labelled(8)
+
+
+def test_pending_feedback_is_capped_and_lost_without_waiting() -> None:
+    sched = FeedbackScheduler(FeedbackConfig(delay_s=3600, max_pending=5), seed=0)
+    for i in range(8):
+        sched.offer(f"p{i}", is_fraud=True, pattern="card_testing")
+    assert len(sched) == 5
+    assert sched.counts["dropped"] == 3
+
+    api = FeedbackApi()
+    txns = _stream(30)
+    sched = FeedbackScheduler(FeedbackConfig(delay_s=3600), seed=0)
+    _run_with_feedback(api, txns, RunConfig(rps=0), sched)
+    assert api.feedback == {}  # not due yet, and the run does not wait
+    assert len(sched) == sched.counts["scheduled"] > 0  # all still pending, none sent
+
+
+def test_feedback_config_is_validated() -> None:
+    with pytest.raises(ValueError, match="legit_label_rate"):
+        FeedbackConfig(legit_label_rate=1.5)
+    with pytest.raises(ValueError, match="delay_s"):
+        FeedbackConfig(delay_s=-1)
+
+
+def test_cli_accepts_drift_and_feedback_flags() -> None:
+    args = build_parser().parse_args(
+        ["run", "--drift", "fraud-shift", "--feedback-delay", "2m", "--legit-label-rate", "0.1"]
+    )
+    assert (args.drift, args.feedback_delay, args.legit_label_rate) == ("fraud-shift", 120.0, 0.1)
+    assert not args.no_feedback
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["run", "--drift", "nope"])

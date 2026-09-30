@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 import pyarrow as pa
 
+from ml.data.drift import DriftProfile, get_profile
 from ml.data.io import ARROW_SCHEMA
 from ml.data.reference import (
     CATEGORIES,
@@ -67,6 +68,9 @@ P_NEW_DEVICE = 0.25
 BURSTS_PER_DAY = 0.02  # in-app purchases, transit taps: small charges in quick succession
 BIG_PURCHASES_PER_DAY = 0.01  # a new laptop or a flight at an unfamiliar merchant
 IMPOSSIBLE_TRAVEL_MIN_KM = 800.0
+# Drift-only session_hijack orders (ml.data.drift): delivery-style categories.
+# grocery and restaurants are everyday categories, so every customer has one.
+SESSION_HIJACK_CATEGORIES = ("pharmacy", "restaurants", "grocery")
 
 
 @dataclass(frozen=True)
@@ -77,6 +81,8 @@ class GeneratorConfig:
     fraud_rate: float = 0.015
     start: datetime = datetime(2026, 1, 1, tzinfo=UTC)
     merchants: int | None = None  # default: max(100, customers // 5)
+    # A name from ml.data.drift.DRIFT_PROFILES; "none" is baseline traffic.
+    drift: str = "none"
 
     def __post_init__(self) -> None:
         if self.customers < 1:
@@ -87,6 +93,7 @@ class GeneratorConfig:
             raise ValueError("fraud_rate must be in [0, 0.5)")
         if self.start.tzinfo is None:
             raise ValueError("start must be timezone-aware")
+        get_profile(self.drift)  # fail early on an unknown profile name
 
     @property
     def n_merchants(self) -> int:
@@ -96,6 +103,8 @@ class GeneratorConfig:
         """Deterministic key/values stored in the Parquet footer."""
         values: dict[str, Any] = asdict(self)
         values["start"] = self.start.astimezone(UTC).isoformat()
+        if self.drift == "none":
+            del values["drift"]  # baseline output (and its footer) predates drift profiles
         values["generator_version"] = GENERATOR_VERSION
         return {k: str(v) for k, v in sorted(values.items())}
 
@@ -505,6 +514,57 @@ class _Fraud:
             amount *= float(rng.uniform(1.2, 1.6))
             t += int(rng.uniform(5, 60) * US_PER_MINUTE)
 
+    def session_hijack(self, customer: Customer) -> None:
+        """Drift-only (profile fraud-shift): a hijacked session on the victim's own device
+        and home IP places several ordinary-sized delivery orders (pharmacy, restaurants,
+        grocery online) over one afternoon, hours apart, at merchants the customer never
+        used. Nothing here trips the baseline patterns' signals (velocity, high-risk
+        merchants, new devices, foreign IPs, night hours); the tell is the combination of
+        online delivery-type categories, new merchants and several orders in a day."""
+        rng = self.rng
+        familiar = {m for ms in customer.familiar.values() for m in ms}
+        cats = [c for c in SESSION_HIJACK_CATEGORIES if c in customer.categories]
+        card = customer.cards[0]
+        day = int(rng.integers(self.lo, max(self.lo + 1, self.hi)) // US_PER_DAY) * US_PER_DAY
+        # Peak shopping hours, so the time of day gives nothing away.
+        t = day + int(rng.integers(10, 14)) * US_PER_HOUR + int(rng.integers(0, US_PER_HOUR))
+        for _ in range(int(rng.integers(3, 6))):
+            cat = cats[int(rng.integers(0, len(cats)))]
+            pool = [m for m in self.world.by_category[cat] if m not in familiar]
+            pool = pool or self.world.by_category[cat]
+            merchant = self.world.merchants[pool[int(rng.integers(0, len(pool)))]]
+            base = CATEGORIES[cat].median_amount * customer.spend_scale
+            self._add(
+                "session_hijack", customer, ts_us=t, card_token=card, merchant=merchant,
+                amount=float(base * rng.uniform(0.8, 2.0)), channel="ecommerce",
+                device_id=customer.devices[0], ip_country=customer.home_country,
+            )  # fmt: skip
+            t += int(rng.uniform(60, 180) * US_PER_MINUTE)
+
+
+def _pattern_weights(profile: DriftProfile) -> dict[FraudPattern, float]:
+    """Incident weights: the baseline mix, plus a profile's extra patterns."""
+    if not profile.extra_patterns:
+        return dict(PATTERN_WEIGHTS)
+    base_total = sum(PATTERN_WEIGHTS.values())
+    keep = 1.0 - sum(profile.extra_patterns.values())
+    weights = {k: v / base_total * keep for k, v in PATTERN_WEIGHTS.items()}
+    return weights | profile.extra_patterns
+
+
+def _apply_population_shift(
+    world: _World, rows: _Rows, profile: DriftProfile, rng: np.random.Generator
+) -> None:
+    """Post-hoc changes to every generated row (baseline rows are never touched)."""
+    cols = rows.cols
+    n = len(rows)
+    switch = rng.random(n) < profile.card_present_to_ecommerce
+    for i in range(n):
+        cols["amount"][i] = max(0.5, round(cols["amount"][i] * profile.amount_scale, 2))
+        if switch[i] and cols["fraud_pattern"][i] is None and cols["channel"][i] == "card_present":
+            cols["channel"][i] = "ecommerce"
+            cols["ip_country"][i] = cols["billing_country"][i]
+
 
 def generate(config: GeneratorConfig | None = None) -> pa.Table:
     """Generate a labelled transaction table. Deterministic for a given config."""
@@ -522,12 +582,19 @@ def generate(config: GeneratorConfig | None = None) -> pa.Table:
     fraud = _Fraud(world, rows, fraud_rng)
     target = round(config.fraud_rate / (1.0 - config.fraud_rate) * n_legit)
     active = [c for c in world.customers if c.row_indices] or world.customers
-    patterns = list(PATTERN_WEIGHTS)
-    p = np.array([PATTERN_WEIGHTS[k] for k in patterns])
+    profile = get_profile(config.drift)
+    pattern_weights = _pattern_weights(profile)
+    patterns = list(pattern_weights)
+    p = np.array([pattern_weights[k] for k in patterns])
     while len(rows) - n_legit < target:
         pattern = patterns[int(fraud_rng.choice(len(patterns), p=p / p.sum()))]
         customer = active[int(fraud_rng.integers(0, len(active)))]
         getattr(fraud, pattern)(customer)
+
+    if not profile.is_baseline:
+        # Its own stream (not one of the three above), so baseline output is unchanged.
+        drift_rng = np.random.default_rng(np.random.SeedSequence([config.seed, 0xD21F7]))
+        _apply_population_shift(world, rows, profile, drift_rng)
 
     cols = rows.cols
     arrays = [

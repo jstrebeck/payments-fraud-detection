@@ -21,6 +21,7 @@ FraudPattern = Literal[
     "impossible_travel",
     "high_value_new_merchant",
     "account_takeover",
+    "session_hijack",  # only in drifted traffic (ml.data.drift, profile fraud-shift)
 ]
 FRAUD_PATTERNS: tuple[FraudPattern, ...] = (
     "card_testing",
@@ -28,6 +29,9 @@ FRAUD_PATTERNS: tuple[FraudPattern, ...] = (
     "high_value_new_merchant",
     "account_takeover",
 )
+# Patterns that appear only under a drift profile (ml.data.drift), never in
+# baseline data. FRAUD_PATTERNS is what every baseline dataset contains.
+DRIFT_FRAUD_PATTERNS: tuple[FraudPattern, ...] = ("session_hijack",)
 
 
 def _known_country(code: str) -> str:
