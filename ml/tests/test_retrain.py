@@ -15,6 +15,7 @@ from ml.training.data import Dataset
 from ml.training.retrain import (
     NotEnoughLabelsError,
     RetrainSettings,
+    card_bucket,
     decide,
     live_dataset,
     retrain_split,
@@ -36,9 +37,21 @@ def test_drift_triggers_a_retrain() -> None:
     assert (d.retrain, d.trigger) == (True, "drift")
 
 
-def test_cooldown_blocks_even_when_drifting() -> None:
-    d = decide(settings(), drift_firing=True, champion_age=1 * D, since_last_retrain=2 * H)
+def test_cooldown_after_a_promotion_blocks_even_when_drifting() -> None:
+    d = decide(
+        settings(),
+        drift_firing=True,
+        champion_age=1 * D,
+        since_last_retrain=2 * H,
+        last_retrain_promoted=True,
+    )
     assert not d.retrain
+
+
+def test_a_rejected_attempt_is_retried_after_an_hour() -> None:
+    kw: dict[str, Any] = {"drift_firing": True, "champion_age": 1 * D}
+    assert not decide(settings(), since_last_retrain=0.5 * H, **kw).retrain
+    assert decide(settings(), since_last_retrain=2 * H, **kw).retrain
 
 
 def test_old_champion_triggers_a_scheduled_retrain() -> None:
@@ -64,6 +77,7 @@ def _frame(n: int, fraud_every: int = 5) -> pd.DataFrame:
     start = datetime(2026, 9, 30, tzinfo=UTC)
     return pd.DataFrame(
         {
+            "card_token": [f"tok_{i % 37:016x}" for i in range(n)],
             "features": [{name: float(i) for name in FEATURE_NAMES} for i in range(n)],
             "label": ["fraud" if i % fraud_every == 0 else "legit" for i in range(n)],
             "label_reason": ["session_hijack" if i % fraud_every == 0 else None for i in range(n)],
@@ -96,21 +110,38 @@ def _base(n: int) -> Dataset:
     )
 
 
-def test_split_tests_on_the_most_recent_live_labels() -> None:
-    live = live_dataset(_frame(100))
-    split = retrain_split(_base(50), live, settings())
-    assert (len(split.test), len(split.valid), len(split.train)) == (40, 20, 50 + 40)
-    # Test is the newest slice, validation just before it, both from live traffic.
-    assert split.test.features.iloc[0, 0] == 60.0
-    assert split.valid.features.iloc[0, 0] == 40.0
-    assert split.test_start > split.valid_start
+def test_split_is_by_card_and_base_only_trains() -> None:
+    frame = _frame(400)
+    live, cards = live_dataset(frame), list(frame["card_token"])
+    split = retrain_split(_base(50), live, cards, settings())
+    assert len(split.train) + len(split.valid) + len(split.test) == 50 + 400
+
+    # Each live row's features encode its row index, which maps back to its card.
+    test_cards = {cards[int(i)] for i in split.test.features.iloc[:, 0]}
+    valid_cards = {cards[int(i)] for i in split.valid.features.iloc[:, 0]}
+    live_train = split.train.features.iloc[50:, 0]
+    train_cards = {cards[int(i)] for i in live_train}
+    assert test_cards
+    assert valid_cards
+    assert train_cards
+    assert not test_cards & valid_cards
+    assert not test_cards & train_cards
+    # The generated history is only ever training data.
+    assert (split.train.features.iloc[:50] == 0).all().all()
+
+
+def test_card_buckets_are_stable() -> None:
+    assert card_bucket("tok_0123456789abcdef") == card_bucket("tok_0123456789abcdef")
+    assert 0 <= card_bucket("tok_0123456789abcdef") < 1
 
 
 def test_too_few_labels_is_a_skip_not_a_crash() -> None:
     with pytest.raises(NotEnoughLabelsError):
-        retrain_split(_base(5), live_dataset(_frame(5)), settings())
+        retrain_split(_base(5), live_dataset(_frame(5)), list(_frame(5)["card_token"]), settings())
+    frame = _frame(50, fraud_every=10_000)  # a single fraud in the whole window
+    live, cards = live_dataset(frame), list(frame["card_token"])
     with pytest.raises(NotEnoughLabelsError, match="test window"):
-        retrain_split(_base(5), live_dataset(_frame(50, fraud_every=10_000)), settings())
+        retrain_split(_base(5), live, cards, settings(min_test_fraud=5))
 
 
 # ---- rollout ---------------------------------------------------------------------

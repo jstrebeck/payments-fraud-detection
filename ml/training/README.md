@@ -31,19 +31,24 @@ Deterministic: same data and config give the same model and metrics.
 
 Run every 30 minutes by the `retrain` CronJob (`deploy/base/retrain/`,
 ADR-0015). Decides first: retrain when `FraudFeatureDrift` is firing in
-Prometheus or the champion is older than 7 days, not within 6 hours of the
-last retrain (`RETRAIN_TRIGGER=force` skips the checks). Then:
+Prometheus or the champion is older than 7 days; not within
+`RETRAIN_COOLDOWN_HOURS` (6) of a retrain that promoted, or
+`RETRAIN_RETRY_HOURS` (1) of one that did not (`RETRAIN_TRIGGER=force` skips
+the checks). Then:
 
 - **Data:** generated history (`BASE_CUSTOMERS` 1000 × `BASE_DAYS` 30) plus
   every labelled payment of the last `LIVE_LOOKBACK_DAYS` (7), with the
   feature vectors the API stored at scoring time and the delayed labels
   (`label`, `label_reason` = fraud pattern).
-- **Split:** live payments in scoring order; newest `LIVE_TEST_FRACTION`
-  (0.4) tests, the `LIVE_VALID_FRACTION` (0.2) before it validates, the rest
-  plus the history trains. Fewer than `MIN_LABELLED` (1000) labels or
-  `MIN_TEST_FRAUD` (20) frauds in the test window is a skip.
+- **Split:** by card (hash of the card token): `LIVE_TEST_FRACTION` (0.2)
+  of cards test, `LIVE_VALID_FRACTION` (0.2) validate, the rest plus the
+  history trains, so drifted traffic reaches training immediately and one
+  card's fraud incident never straddles train and test. Fewer than
+  `MIN_LABELLED` (1000) labels or `MIN_TEST_FRAUD` (50) frauds in the test
+  cards is a skip.
 - **Train and gate:** `train_on_split` with `PROMOTE=true`; tags
-  `retrain=true`, `retrain_trigger`. On a win it rolls the predictor
+  `retrain=true`, `retrain_trigger`, and `retrain_outcome`
+  (promoted/rejected) on the run. On a win it rolls the predictor
   (`ml.evaluation.rollout`, in-cluster ServiceAccount).
 
 Every version (trained either way) is tagged `recommended_review_threshold`

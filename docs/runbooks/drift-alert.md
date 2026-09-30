@@ -49,10 +49,11 @@ kubectl -n fraud get jobs -l app.kubernetes.io/name=retrain
 kubectl -n fraud logs job/<retrain-...>     # JSON lines: decision, skipped | trained, rolled_out
 ```
 
-- `decision ... retrain: false`: no drift firing, champion young, or inside
-  the 6h cooldown.
-- `skipped`: not enough labels yet (needs 1,000 labelled payments and 20
-  frauds in the newest 40%). Labels arrive about 5 minutes after scoring.
+- `decision ... retrain: false`: no drift firing, champion young, or waiting
+  (6h after a promotion, 1h after a rejected attempt).
+- `skipped`: not enough labels yet (needs 1,000 labelled payments and 50
+  frauds among the held-out test cards). Labels arrive about 5 minutes after
+  scoring.
 - `trained` with `gate: ...`: the gate's verdict; on a win, `rolled_out`
   follows and **Fraud / model** shows the new served version.
 - A failed Job raises `FraudRetrainFailed`. Exit 4 = champion moved but the

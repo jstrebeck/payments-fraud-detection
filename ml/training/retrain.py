@@ -11,11 +11,16 @@
    payment from the last `LIVE_LOOKBACK_DAYS`, using the feature vectors the API
    stored when it scored them: exactly what the model saw online, no
    recomputation. Labels come from delayed feedback (chargebacks, confirmations).
-3. **Split.** Labelled live payments in order of scoring time: the most recent
-   `LIVE_TEST_FRACTION` is the test window, the slice before it validates (early
-   stopping), everything older plus the generated history trains. The gate
-   therefore compares challenger and champion on the most recent production
-   traffic, which is where a drifted champion loses.
+3. **Split.** Labelled live payments are split **by card** (a hash of the card
+   token): `LIVE_TEST_FRACTION` of cards test, `LIVE_VALID_FRACTION` validate
+   (early stopping), the rest plus the generated history train. Every part holds
+   recent traffic from the moment drift starts, so the challenger learns the new
+   patterns, and all of one card's payments (one fraud incident) stay on one side,
+   so the test window is not leaked. The gate compares challenger and champion on
+   held-out cards of current production traffic, where a drifted champion loses.
+   (A time split, newest labels as the test window, was tried first: shortly
+   after drift began the drifted labels were all in validation and test and the
+   challenger never trained on them.)
 4. **Train, gate, promote.** The same code as `make train` (`train_on_split`),
    with the gate. On a win, `champion` moves and the Job rolls the predictor
    (ml.evaluation.rollout). The new version carries its recommended decision
@@ -27,13 +32,14 @@ predictor rollout failed (the alias has moved; rerun `promote.py --rollout-only`
 
 from __future__ import annotations
 
+import hashlib
 import json
-import math
 import os
 import sys
 import time
 import urllib.parse
 import urllib.request
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -54,6 +60,7 @@ from ml.training.data import Dataset, Split
 
 EXIT_ROLLOUT_FAILED = 4
 DRIFT_ALERT = "FraudFeatureDrift"
+OUTCOME_TAG = "retrain_outcome"  # promoted | rejected, set on the run at the end
 KNOWN_PATTERNS = frozenset(FRAUD_PATTERNS) | frozenset(DRIFT_FRAUD_PATTERNS)
 
 
@@ -63,14 +70,19 @@ class RetrainSettings(BaseSettings):
     database_url: str = "postgresql+asyncpg://fraud:fraud@localhost:5432/payments"
     prometheus_url: str = "http://kube-prometheus-stack-prometheus.monitoring.svc:9090"
     retrain_trigger: Literal["auto", "force"] = "auto"
+    # Wait after a promotion before retraining again (no promotion loops) ...
     retrain_cooldown_hours: float = Field(default=6.0, ge=0)
+    # ... but retry sooner after a rejected or failed attempt: more labels arrive.
+    retrain_retry_hours: float = Field(default=1.0, ge=0)
     retrain_max_age_days: float = Field(default=7.0, gt=0)
     live_lookback_days: float = Field(default=7.0, gt=0)
     min_labelled: int = Field(default=1000, ge=1)
-    min_test_fraud: int = Field(default=20, ge=1)
+    # Each fraud in the test window is worth 1/n of recall; with fewer than ~50 a
+    # single payment can swing the gate's recall check (measured on the drill data).
+    min_test_fraud: int = Field(default=50, ge=1)
     min_valid_fraud: int = Field(default=10, ge=1)
-    live_test_fraction: float = Field(default=0.4, gt=0, lt=1)
-    live_valid_fraction: float = Field(default=0.2, gt=0, lt=1)
+    live_test_fraction: float = Field(default=0.2, gt=0, lt=0.5)
+    live_valid_fraction: float = Field(default=0.2, gt=0, lt=0.5)
     base_customers: int = Field(default=1000, ge=1)
     base_days: int = Field(default=30, ge=1)
     base_seed: int | None = None  # default: time-based, logged
@@ -92,14 +104,19 @@ def decide(
     drift_firing: bool,
     champion_age: timedelta | None,
     since_last_retrain: timedelta | None,
+    last_retrain_promoted: bool = False,
 ) -> Decision:
     """Pure trigger policy (tested without Prometheus or MLflow)."""
     if settings.retrain_trigger == "force":
         return Decision(True, "force", "RETRAIN_TRIGGER=force")
-    cooldown = timedelta(hours=settings.retrain_cooldown_hours)
-    if since_last_retrain is not None and since_last_retrain < cooldown:
+    hours = (
+        settings.retrain_cooldown_hours if last_retrain_promoted else settings.retrain_retry_hours
+    )
+    wait = timedelta(hours=hours)
+    if since_last_retrain is not None and since_last_retrain < wait:
+        what = "promoted" if last_retrain_promoted else "did not promote"
         return Decision(
-            False, "none", f"last retrain {_ago(since_last_retrain)}, cooldown {cooldown}"
+            False, "none", f"last retrain {_ago(since_last_retrain)} ago {what}; waiting {wait}"
         )
     if drift_firing:
         return Decision(True, "drift", f"{DRIFT_ALERT} is firing")
@@ -147,7 +164,7 @@ def live_frame(database_url: str, lookback_days: float) -> pd.DataFrame:
     from ml.evaluation.drift_monitor import sync_database_url
 
     query = sa.text(
-        "SELECT features, label, label_reason, created_at FROM payments "
+        "SELECT card_token, features, label, label_reason, created_at FROM payments "
         "WHERE label IS NOT NULL AND created_at >= now() - make_interval(secs => :secs) "
         "ORDER BY created_at"
     )
@@ -158,7 +175,8 @@ def live_frame(database_url: str, lookback_days: float) -> pd.DataFrame:
     finally:
         engine.dispose()
     return pd.DataFrame(
-        [dict(r) for r in rows], columns=["features", "label", "label_reason", "created_at"]
+        [dict(r) for r in rows],
+        columns=["card_token", "features", "label", "label_reason", "created_at"],
     )
 
 
@@ -186,16 +204,21 @@ class NotEnoughLabelsError(RuntimeError):
     """Too few labelled payments to train and gate responsibly."""
 
 
-def retrain_split(base: Dataset, live: Dataset, settings: RetrainSettings) -> Split:
-    """Base + older live trains; recent live validates; most recent live tests."""
+def card_bucket(card_token: str) -> float:
+    """Stable position of a card in [0, 1), independent of run and process."""
+    return int(hashlib.sha256(card_token.encode()).hexdigest()[:8], 16) / 2**32
+
+
+def retrain_split(
+    base: Dataset, live: Dataset, cards: Sequence[str], settings: RetrainSettings
+) -> Split:
+    """Split labelled live payments by card; base history joins the training part."""
     n = len(live)
     if n < settings.min_labelled:
         raise NotEnoughLabelsError(f"{n} labelled payments, need {settings.min_labelled}")
-    n_test = math.ceil(n * settings.live_test_fraction)
-    n_valid = math.ceil(n * settings.live_valid_fraction)
-    idx = np.arange(n)
-    in_test = idx >= n - n_test
-    in_valid = (idx >= n - n_test - n_valid) & ~in_test
+    bucket = np.array([card_bucket(c) for c in cards])
+    in_test = bucket >= 1 - settings.live_test_fraction
+    in_valid = (bucket >= 1 - settings.live_test_fraction - settings.live_valid_fraction) & ~in_test
     test, valid = live.take(in_test), live.take(in_valid)
     if int(test.label.sum()) < settings.min_test_fraud:
         raise NotEnoughLabelsError(
@@ -251,10 +274,14 @@ def main() -> int:
         if champion is not None
         else None
     )
-    since_last = _since_last_retrain(client, train_settings.mlflow_experiment_name, now)
+    since_last, last_promoted = _last_retrain(client, train_settings.mlflow_experiment_name, now)
     firing = settings.retrain_trigger == "auto" and drift_alert_firing(settings.prometheus_url)
     decision = decide(
-        settings, drift_firing=firing, champion_age=champion_age, since_last_retrain=since_last
+        settings,
+        drift_firing=firing,
+        champion_age=champion_age,
+        since_last_retrain=since_last,
+        last_retrain_promoted=last_promoted,
     )
     _log("decision", retrain=decision.retrain, trigger=decision.trigger, reason=decision.reason)
     if not decision.retrain:
@@ -262,9 +289,10 @@ def main() -> int:
 
     seed = settings.base_seed if settings.base_seed is not None else int(time.time())
     try:
-        live = live_dataset(live_frame(settings.database_url, settings.live_lookback_days))
+        frame = live_frame(settings.database_url, settings.live_lookback_days)
+        live = live_dataset(frame)
         base = base_dataset(seed, settings.base_customers, settings.base_days)
-        split = retrain_split(base, live, settings)
+        split = retrain_split(base, live, list(frame["card_token"]), settings)
     except NotEnoughLabelsError as exc:
         _log("skipped", reason=str(exc))
         return 0
@@ -292,14 +320,18 @@ def main() -> int:
             "retrain.live_rows": len(live),
             "retrain.live_fraud": live_fraud,
             "retrain.lookback_days": settings.live_lookback_days,
+            "retrain.split": "by card",
             "retrain.live_test_fraction": settings.live_test_fraction,
+            "retrain.live_valid_fraction": settings.live_valid_fraction,
         },
         extra_tags={"retrain": "true", "retrain_trigger": decision.trigger},
     )
     _log("trained", **summary(train_settings, result))
 
     promotion = result.promotion
-    if promotion is None or not promotion.result.promote or promotion.champion_after is None:
+    promoted = bool(promotion and promotion.result.promote and promotion.champion_after)
+    MlflowClient().set_tag(result.run_id, OUTCOME_TAG, "promoted" if promoted else "rejected")
+    if promotion is None or not promoted or promotion.champion_after is None:
         return 0
     if not settings.rollout or not in_cluster():
         _log("rollout_skipped", reason="not in cluster or ROLLOUT=false",
@@ -316,10 +348,11 @@ def main() -> int:
     return 0
 
 
-def _since_last_retrain(client: Any, experiment: str, now: datetime) -> timedelta | None:
+def _last_retrain(client: Any, experiment: str, now: datetime) -> tuple[timedelta | None, bool]:
+    """Time since the newest retraining run, and whether it promoted its model."""
     exp = client.get_experiment_by_name(experiment)
     if exp is None:
-        return None
+        return None, False
     runs = client.search_runs(
         [exp.experiment_id],
         filter_string="tags.retrain = 'true'",
@@ -327,8 +360,10 @@ def _since_last_retrain(client: Any, experiment: str, now: datetime) -> timedelt
         max_results=1,
     )
     if not runs:
-        return None
-    return now - datetime.fromtimestamp(runs[0].info.start_time / 1000, UTC)
+        return None, False
+    run = runs[0]
+    ago = now - datetime.fromtimestamp(run.info.start_time / 1000, UTC)
+    return ago, run.data.tags.get(OUTCOME_TAG) == "promoted"
 
 
 def _log(event: str, **fields: Any) -> None:

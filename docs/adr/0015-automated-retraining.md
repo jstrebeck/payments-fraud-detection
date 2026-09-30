@@ -28,18 +28,29 @@ retrained model serving in the cluster, and only if it is better. Choices:
 
 - **Trigger:** the `retrain` CronJob runs every 30 minutes and retrains when
   `FraudFeatureDrift` is firing (asked from Prometheus), or when the champion
-  is older than 7 days, with a 6 hour cooldown between retrains. Checking is
-  cheap; most runs exit in seconds.
+  is older than 7 days. It waits 6 hours after a retrain that promoted (no
+  promotion loops) but only 1 hour after one the gate rejected, because more
+  labels will have arrived. Checking is cheap; most runs exit in seconds.
 - **Data:** a small generated history (1,000 customers, 30 days) plus every
   labelled payment of the last 7 days, using the feature vectors the API
   stored when it scored them. That is exact online/offline parity, with no
   recomputation, and it is what the drift was about.
-- **Split and gate:** labelled live payments in scoring order; the newest 40%
-  is the test window, the 20% before it validates (early stopping); the rest,
-  plus the history, trains. The unchanged gate (ADR-0006) compares challenger
-  and champion on that window, so promotion means "better on current
-  traffic". Too few labels (under 1,000, or under 20 frauds to test on) is a
-  skip, not a failure.
+- **Split and gate:** labelled live payments are split **by card** (hash of
+  the card token): 20% of cards test, 20% validate (early stopping), 60% plus
+  the history train. All of one card's payments, and so a whole fraud
+  incident, stay on one side. The unchanged gate (ADR-0006) compares
+  challenger and champion on the held-out cards, so promotion means "better
+  on current traffic". Too few labels (under 1,000, or under 50 frauds to test
+  on) is a skip, not a failure.
+
+  A time split (newest 40% of labels as the test window) was the first
+  version. The Phase 7 drill showed its flaw: an hour after drift began, the
+  drifted labels were all in validation and test, the challenger never trained
+  on the new pattern (recall 0.0 on it) and the gate rightly rejected it.
+  Replayed offline on the same labels, the card split promoted the challenger
+  (PR-AUC 0.54 to 0.57 against the champion's 0.45, three seeds). With 32
+  test frauds one seed was still rejected on recall at 1% FPR, where one
+  fraud is worth 0.03; hence the 50-fraud minimum.
 - **Promotion:** the gate moves `champion`; the Job then rolls the predictor
   through the Kubernetes API (ServiceAccount `retrainer`, a Role limited to
   patching `fraud-detector` and reading its Deployment). Git does not change.
