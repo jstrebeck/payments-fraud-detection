@@ -9,13 +9,18 @@ serving concern in this project (ADR-0001). No authentication: it is a demo.
 | Method | Path | Notes |
 |---|---|---|
 | `POST` | `/payments` | Body: `ml.data.schema.Transaction` (label fields are rejected with 422). Returns `{payment_id, transaction_id, decision, score, scorer, model_version}`. `201` when scored, `200` with the stored decision when the `transaction_id` was seen before (idempotent). |
-| `GET` | `/payments/{payment_id}` | Decision record plus the transaction and the features used. |
+| `GET` | `/payments/{payment_id}` | Decision record plus the transaction, the features used and the `request_id` that created it. |
 | `POST` | `/payments/{payment_id}/feedback` | Phase 7. Body `{label: "fraud" \| "legit", source}`. |
 | `GET` | `/healthz` | Process up. |
 | `GET` | `/readyz` | `200` when the database answers. `scorer` is `ok`, or `fallback` while the primary scorer is unavailable and rules are serving; set `REQUIRE_SCORER=true` to make that a `503`. |
 | `GET` | `/metrics` | Prometheus. Names in `docs/architecture.md` "Key metrics". |
 
-Every response carries `x-request-id` (taken from the request if present).
+Every response carries `x-request-id`: the caller's value if it is 1 to 64
+characters of `[A-Za-z0-9._:-]`, otherwise a fresh one. That correlation ID is
+bound to every log line for the request, sent to the KServe predictor (V2
+request `id` and `x-request-id` header), and stored on the payment as
+`request_id` (`POST` and `GET` responses include it; a replayed submission
+returns the original request's ID). See `docs/runbooks/trace-a-payment.md`.
 
 ## Configuration (environment)
 

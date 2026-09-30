@@ -23,6 +23,7 @@ import structlog
 
 from ml.features import FEATURE_NAMES, FEATURE_VERSION
 from payments_api import metrics
+from payments_api.logs import REQUEST_ID_HEADER, current_request_id
 from payments_api.scoring.base import ScoreResult
 from payments_api.scoring.errors import IncompatibleModelError
 
@@ -120,14 +121,23 @@ class KServeScorer:
     async def score(self, features: Mapping[str, float]) -> ScoreResult:
         if self._client is None:
             raise KServeHTTPError("scorer not started")
-        payload = {
+        payload: dict[str, Any] = {
             "inputs": [
                 {"name": n, "datatype": "FP64", "shape": [1, 1], "data": [float(features[n])]}
                 for n in FEATURE_NAMES
             ]
         }
+        # Propagate the payment's correlation ID to the predictor: as the V2 request
+        # `id` (MLServer echoes it in the response, not in its access log) and as a header.
+        # It is read from the request's structlog context rather than passed in, so
+        # the FraudScorer protocol stays `score(features)` for every scorer and
+        # only this one, which makes a network hop, deals with tracing.
+        headers: dict[str, str] = {}
+        if request_id := current_request_id():
+            payload["id"] = request_id
+            headers[REQUEST_ID_HEADER] = request_id
         try:
-            resp = await self._client.post(self.url, json=payload)
+            resp = await self._client.post(self.url, json=payload, headers=headers)
         except httpx.TimeoutException as exc:
             raise KServeTimeoutError(f"no answer within {self.timeout_s}s") from exc
         except httpx.HTTPError as exc:

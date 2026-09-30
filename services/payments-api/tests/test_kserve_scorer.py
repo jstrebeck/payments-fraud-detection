@@ -9,8 +9,10 @@ from typing import Any
 
 import httpx2 as httpx
 import pytest
+import structlog
 from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY
+from structlog.testing import capture_logs
 
 from ml.features import FEATURE_NAMES, FEATURE_VERSION
 from payments_api.config import Settings
@@ -38,6 +40,7 @@ class FakePredictor:
         self.status = 200
         self.raise_exc: Exception | None = None
         self.requests: list[dict[str, Any]] = []
+        self.request_ids: list[str | None] = []  # x-request-id header per inference call
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/ready"):
@@ -45,6 +48,7 @@ class FakePredictor:
         if self.raise_exc is not None:
             raise self.raise_exc
         self.requests.append(json.loads(request.content))
+        self.request_ids.append(request.headers.get("x-request-id"))
         if self.status != 200:
             return httpx.Response(self.status, text="boom")
         body: dict[str, Any] = {
@@ -56,6 +60,8 @@ class FakePredictor:
         }  # fmt: skip
         if self.version is not None:
             body["model_version"] = self.version
+        if "id" in self.requests[-1]:  # MLServer echoes the request id
+            body["id"] = self.requests[-1]["id"]
         return httpx.Response(200, json=body)
 
 
@@ -124,6 +130,25 @@ def test_scores_with_v2_request_and_reports_the_served_version(registry: FakeReg
     assert scorer.model_version == "fraud-detector/2"
     live = {"scorer": "kserve", "version": "fraud-detector/2"}
     assert REGISTRY.get_sample_value("fraud_model_version_info", live) == 1.0
+
+
+def test_request_id_is_propagated_to_the_predictor(registry: FakeRegistry) -> None:
+    predictor = FakePredictor()
+    scorer = _scorer(predictor, registry)
+
+    async def go() -> None:
+        await scorer.start()
+        try:
+            with structlog.contextvars.bound_contextvars(request_id="req-42"):
+                await scorer.score(FEATURES)
+            await scorer.score(FEATURES)  # outside a request: no id sent
+        finally:
+            await scorer.close()
+
+    asyncio.run(go())
+    assert predictor.requests[0]["id"] == "req-42"
+    assert predictor.request_ids == ["req-42", None]
+    assert "id" not in predictor.requests[1]
 
 
 def test_feature_version_is_checked_once_per_version(registry: FakeRegistry) -> None:
@@ -271,6 +296,19 @@ def test_api_records_the_kserve_decision(
     assert client.get("/readyz").json()["scorer"] == "ok"
 
 
+def test_api_request_id_reaches_the_predictor_and_the_record(
+    kserve_app: tuple[TestClient, FakePredictor], make_txn: TxnFactory
+) -> None:
+    client, predictor = kserve_app
+    resp = client.post("/payments", json=make_txn(), headers={"x-request-id": "sim-abc123"})
+    assert resp.headers["x-request-id"] == "sim-abc123"
+    assert resp.json()["request_id"] == "sim-abc123"
+    assert predictor.requests[-1]["id"] == "sim-abc123"
+    assert predictor.request_ids[-1] == "sim-abc123"
+    record = client.get(f"/payments/{resp.json()['payment_id']}").json()
+    assert record["request_id"] == "sim-abc123"
+
+
 def test_api_falls_back_to_rules_on_predictor_timeout(
     kserve_app: tuple[TestClient, FakePredictor], make_txn: TxnFactory
 ) -> None:
@@ -283,3 +321,17 @@ def test_api_falls_back_to_rules_on_predictor_timeout(
     assert resp.status_code == 201
     assert resp.json()["scorer"] == "rule"
     assert REGISTRY.get_sample_value("fraud_scorer_fallback_total", labels) == before + 1
+
+
+def test_api_logs_carry_the_request_id_on_fallback(
+    kserve_app: tuple[TestClient, FakePredictor], make_txn: TxnFactory
+) -> None:
+    client, predictor = kserve_app
+    predictor.status = 503
+    with capture_logs(processors=[structlog.contextvars.merge_contextvars]) as logs:
+        client.post(
+            "/payments", json=make_txn(transaction_id="t-logs"), headers={"x-request-id": "rid-7"}
+        )
+    events = {e["event"]: e for e in logs}
+    for name in ("scorer_failed_using_fallback", "payment_scored", "request"):
+        assert events[name]["request_id"] == "rid-7", name

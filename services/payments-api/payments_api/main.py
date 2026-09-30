@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from importlib.metadata import version
@@ -14,7 +13,7 @@ from fastapi import FastAPI, Request, Response
 from payments_api import metrics
 from payments_api.config import Settings
 from payments_api.db import create_engine, session_factory
-from payments_api.logs import configure_logging
+from payments_api.logs import REQUEST_ID_HEADER, configure_logging, request_id_from
 from payments_api.policy import DecisionPolicy
 from payments_api.routes import router
 from payments_api.scoring import build_scorer
@@ -61,7 +60,7 @@ async def observe_request(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
     """Request ID, structured access log and RED metrics for every request."""
-    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+    request_id = request_id_from(request.headers.get(REQUEST_ID_HEADER))
     structlog.contextvars.clear_contextvars()
     structlog.contextvars.bind_contextvars(request_id=request_id)
     start = time.perf_counter()
@@ -69,7 +68,7 @@ async def observe_request(
     try:
         response = await call_next(request)
         status_code = response.status_code
-        response.headers["x-request-id"] = request_id
+        response.headers[REQUEST_ID_HEADER] = request_id
         return response
     finally:
         elapsed = time.perf_counter() - start

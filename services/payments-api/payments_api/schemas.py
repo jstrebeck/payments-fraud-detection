@@ -19,6 +19,7 @@ class PaymentDecision(BaseModel):
     score: float
     scorer: str
     model_version: str
+    request_id: str | None
 
     @classmethod
     def from_row(cls, p: Payment) -> PaymentDecision:
@@ -29,6 +30,7 @@ class PaymentDecision(BaseModel):
             score=p.score,
             scorer=p.scorer,
             model_version=p.model_version,
+            request_id=p.request_id,
         )
 
 

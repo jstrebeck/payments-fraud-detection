@@ -21,7 +21,8 @@ RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --no-create-home app
 COPY --from=build --chown=app:app /app/.venv /app/.venv
 ENV PATH=/app/.venv/bin:$PATH \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    LOG_FORMAT=json
 WORKDIR /app
 USER 10001
 EXPOSE 9100

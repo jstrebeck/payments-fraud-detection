@@ -7,11 +7,12 @@ from itertools import islice
 
 import httpx2 as httpx
 import pytest
+from structlog.testing import capture_logs
 
 from ml.data.generator import GeneratorConfig, generate
 from ml.data.io import iter_transactions
 from ml.data.schema import LabelledTransaction
-from simulator.cli import parse_duration, parse_seed, stream
+from simulator.cli import configure_logging, parse_duration, parse_seed, stream
 from simulator.runner import RunConfig, RunStats, run, shard
 
 
@@ -25,11 +26,13 @@ class FakeApi:
 
     def __init__(self, fail_every: int = 0) -> None:
         self.bodies: list[dict[str, object]] = []
+        self.request_ids: list[str | None] = []
         self.fail_every = fail_every
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         self.bodies.append(body)
+        self.request_ids.append(request.headers.get("x-request-id"))
         if self.fail_every and len(self.bodies) % self.fail_every == 0:
             return httpx.Response(503)
         decision = "declined" if body["amount"] > 500 else "approved"
@@ -137,3 +140,30 @@ def test_parse_seed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert parse_seed("auto") == 1_790_000_000
     with pytest.raises(argparse.ArgumentTypeError):
         parse_seed("lucky")
+
+
+def test_every_payment_carries_a_unique_request_id() -> None:
+    api = FakeApi()
+    _run(api, _stream(30), RunConfig(rps=0, concurrency=4))
+    ids = api.request_ids
+    assert len(ids) == 30
+    assert None not in ids
+    assert len(set(ids)) == 30
+
+
+def test_request_id_is_logged_for_failures_and_interesting_outcomes() -> None:
+    configure_logging("DEBUG", "console")  # other tests may have left an INFO filter
+    api = FakeApi(fail_every=3)
+    txns = _stream(12)
+    with capture_logs() as logs:
+        _run(api, txns, RunConfig(rps=0, concurrency=1))
+    sent = set(api.request_ids)
+    failed = [e for e in logs if e["event"] == "payment_failed"]
+    assert len(failed) == 4
+    assert all(e["request_id"] in sent and e["log_level"] == "warning" for e in failed)
+    outcomes = [e for e in logs if e["event"] == "payment_outcome"]
+    assert len(outcomes) == 8  # every successful payment, at info or debug
+    for e in outcomes:
+        interesting = e["decision"] in {"review", "declined"} or e["truth"] == "fraud"
+        assert e["log_level"] == ("info" if interesting else "debug")
+        assert e["request_id"] in sent

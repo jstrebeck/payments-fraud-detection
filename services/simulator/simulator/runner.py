@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 import zlib
 from collections import Counter
 from collections.abc import Iterable
@@ -23,6 +24,7 @@ from simulator import metrics
 log = structlog.get_logger(__name__)
 
 FLAGGED = frozenset({"review", "declined"})
+REQUEST_ID_HEADER = "x-request-id"
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,14 +113,22 @@ async def run(
 
 async def _send(client: httpx.AsyncClient, txn: LabelledTransaction, stats: RunStats) -> None:
     body = txn.unlabelled().model_dump(mode="json")
+    # Correlation ID for this payment: the API logs it, forwards it to the
+    # predictor and stores it on the payment row (docs/runbooks/trace-a-payment.md).
+    request_id = uuid.uuid4().hex
     start = time.perf_counter()
     try:
-        resp = await client.post("/payments", json=body)
+        resp = await client.post("/payments", json=body, headers={REQUEST_ID_HEADER: request_id})
         resp.raise_for_status()
     except httpx.HTTPError as exc:
         stats.errors += 1
         metrics.REQUESTS.labels("error").inc()
-        log.warning("payment_failed", transaction_id=txn.transaction_id, error=repr(exc))
+        log.warning(
+            "payment_failed",
+            request_id=request_id,
+            transaction_id=txn.transaction_id,
+            error=repr(exc),
+        )
         return
     finally:
         metrics.LATENCY.observe(time.perf_counter() - start)
@@ -126,4 +136,17 @@ async def _send(client: httpx.AsyncClient, txn: LabelledTransaction, stats: RunS
     decision = resp.json()["decision"]
     stats.record(decision, txn.is_fraud)
     metrics.REQUESTS.labels("ok").inc()
-    metrics.DECISIONS.labels(decision, "fraud" if txn.is_fraud else "legit").inc()
+    truth = "fraud" if txn.is_fraud else "legit"
+    metrics.DECISIONS.labels(decision, truth).inc()
+    # Every payment at debug; at info only the ones worth tracing (flagged, or
+    # fraud by ground truth, which includes misses). Keeps a steady 1.5 rps
+    # simulator from writing a log line per legit approval.
+    interesting = decision in FLAGGED or txn.is_fraud
+    (log.info if interesting else log.debug)(
+        "payment_outcome",
+        request_id=request_id,
+        transaction_id=txn.transaction_id,
+        decision=decision,
+        truth=truth,
+        pattern=txn.fraud_pattern,
+    )

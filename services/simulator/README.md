@@ -21,6 +21,12 @@ runs it in compose); in the cluster a `Deployment` with a low steady rate
 - Records the API's decision against ground truth and prints a summary
   (decision mix, confusion counts, precision/recall treating `review` and
   `declined` as flagged).
+- Sends a fresh correlation ID (`x-request-id`, uuid4 hex) with every payment.
+  Logs `payment_failed` (warning) and `payment_outcome` with that
+  `request_id`: at info for flagged or fraudulent payments (including missed
+  fraud), at debug for the rest, so a steady run does not log every approval.
+  `LOG_LEVEL` (default `INFO`) and `LOG_FORMAT` (`console`; the image sets
+  `json`) as in the API.
 - Optional `/metrics` (`--metrics-port`): `fraud_sim_requests_total{outcome}`,
   `fraud_sim_request_duration_seconds`, `fraud_sim_decisions_total{decision,truth}`.
 - Phase 7: posts delayed `feedback` for a sample of past transactions; drift

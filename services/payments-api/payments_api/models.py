@@ -54,6 +54,9 @@ class Payment(Base):
     decision: Mapped[str] = mapped_column(String(16))
     scorer: Mapped[str] = mapped_column(String(32))
     model_version: Mapped[str] = mapped_column(String(64))
+    # Correlation ID of the request that created the row (x-request-id); lets one
+    # payment be followed through simulator, API and predictor logs.
+    request_id: Mapped[str | None] = mapped_column(String(64), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

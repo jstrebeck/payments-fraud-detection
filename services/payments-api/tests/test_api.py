@@ -5,12 +5,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from alembic import command
 from fastapi.testclient import TestClient
 
 from ml.data.generator import GeneratorConfig, generate
 from ml.data.io import iter_transactions
 from ml.features import FEATURE_NAMES
 from ml.features.batch import featurize
+from payments_api.migrate import alembic_config
 
 TxnFactory = Callable[..., dict[str, Any]]
 
@@ -32,7 +34,10 @@ def test_create_and_fetch_payment(client: TestClient, make_txn: TxnFactory) -> N
     assert body["model_version"] == "rules-v1"
     assert resp.headers["x-request-id"]
 
+    assert body["request_id"] == resp.headers["x-request-id"]
+
     record = client.get(f"/payments/{body['payment_id']}").json()
+    assert record["request_id"] == body["request_id"]
     assert record["transaction"] == make_txn() | {"timestamp": "2026-01-05T12:00:00Z"}
     assert tuple(record["features"]) == FEATURE_NAMES
     assert record["decision"] == body["decision"]
@@ -115,3 +120,32 @@ def test_online_features_match_batch_features(client: TestClient) -> None:
     for payment_id, want in zip(payment_ids, expected, strict=True):
         got = client.get(f"/payments/{payment_id}").json()["features"]
         assert got == pytest.approx(want, rel=1e-12, abs=1e-9)
+
+
+def test_caller_request_id_is_kept_and_replays_keep_the_original(
+    client: TestClient, make_txn: TxnFactory
+) -> None:
+    first = client.post("/payments", json=make_txn(), headers={"x-request-id": "sim-1"})
+    assert first.status_code == 201
+    assert first.json()["request_id"] == "sim-1"
+
+    replay = client.post("/payments", json=make_txn(), headers={"x-request-id": "sim-2"})
+    assert replay.status_code == 200
+    assert replay.headers["x-request-id"] == "sim-2"  # this call's own id
+    assert replay.json()["request_id"] == "sim-1"  # the stored decision's id
+
+
+@pytest.mark.parametrize("bad", ["x" * 65, "has space", 'forged" level="error'])
+def test_malformed_request_id_is_replaced(
+    client: TestClient, make_txn: TxnFactory, bad: str
+) -> None:
+    resp = client.post("/payments", json=make_txn(), headers={"x-request-id": bad})
+    rid = resp.headers["x-request-id"]
+    assert rid != bad
+    assert len(rid) == 32
+    assert resp.json()["request_id"] == rid
+
+
+def test_migrations_match_the_models(database_url: str) -> None:
+    """`alembic check`: the migrated schema has no drift from models.py."""
+    command.check(alembic_config(database_url))

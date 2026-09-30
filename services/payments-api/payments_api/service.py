@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ml.data.schema import Transaction
 from ml.features import CardContext, build_features
 from payments_api import metrics
+from payments_api.logs import current_request_id
 from payments_api.models import Payment
 from payments_api.policy import DecisionPolicy
 from payments_api.repository import PaymentRepository
@@ -62,6 +63,8 @@ class PaymentService:
                 decision=decision,
                 scorer=result.scorer,
                 model_version=result.model_version,
+                # A replay returns the stored row, so the original ID is kept.
+                request_id=current_request_id(),
             )
             session.add(payment)
             try:

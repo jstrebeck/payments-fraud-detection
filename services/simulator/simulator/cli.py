@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import re
 import time
@@ -111,6 +112,29 @@ async def _main(args: argparse.Namespace) -> int:
     return 1 if stats.sent == 0 else 0
 
 
+def configure_logging(level: str, fmt: str) -> None:
+    """Same shape as the API's logs: JSON in containers, console in dev.
+
+    INFO by default, so per-payment `payment_outcome` lines only appear for
+    flagged or fraudulent payments; LOG_LEVEL=DEBUG shows every payment.
+    """
+    renderer: structlog.typing.Processor = (
+        structlog.processors.JSONRenderer() if fmt == "json" else structlog.dev.ConsoleRenderer()
+    )
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso", utc=True),
+            renderer,
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(logging.getLevelName(level.upper())),
+        logger_factory=structlog.PrintLoggerFactory(),
+        cache_logger_on_first_use=False,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    configure_logging(os.environ.get("LOG_LEVEL", "INFO"), os.environ.get("LOG_FORMAT", "console"))
     return asyncio.run(_main(args))
