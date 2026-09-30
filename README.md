@@ -4,23 +4,28 @@
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](pyproject.toml)
 
-An end-to-end MLOps showcase: a synthetic payments platform that scores every
-transaction for fraud in real time, with the full lifecycle of the model
-(training, tracking, registry, serving, monitoring, retraining) automated and
-running on a self-hosted Kubernetes homelab.
+I wanted to put my payments experience to use in a homelab project, so this
+is a small payments platform, with synthetic data, that scores every
+transaction for fraud in real time. The interesting part is everything around
+the model: it is trained and versioned in MLflow, served by KServe, deployed
+with Argo CD, watched with Prometheus and Grafana, and retrained on its own
+when the traffic it sees starts to drift. It all runs on my Kubernetes
+cluster at home.
 
-**Author:** Josh Strebeck ([@jstrebeck](https://github.com/jstrebeck))
-**Status:** all eight phases built. The API runs in the homelab and scores every payment with the `champion` model served by KServe, deployed by Argo CD from `deploy/overlays/homelab`, with dashboards, alerts, correlation IDs, delayed label feedback, drift detection, and alert-driven retraining that promotes only through the evaluation gate. See the walkthrough below. See [ROADMAP.md](ROADMAP.md).
-**Note:** the self-hosted GitHub Actions runner is offline for now, so the image build/push and cluster-training workflows are skipped and deploys are run by hand (`make release`, `make train-cluster`). Details in [docs/ci-cd.md](docs/ci-cd.md).
-**License:** [MIT](LICENSE)
+The walkthrough below follows one of those drifts from detection to a new
+model in production.
+
+*Releases are cut from the command line (`make release`) for now. The GitHub
+Actions workflows that automate them are in place and switch on once a
+self-hosted runner is connected ([docs/ci-cd.md](docs/ci-cd.md)).*
 
 ## What this demonstrates
 
 | Skill area | How it shows up here |
 |---|---|
 | ML experiment tracking and model registry | MLflow tracking server, model registry with alias-based promotion |
-| Model serving | KServe `InferenceService` (RawDeployment mode) pulling versioned artifacts from S3-compatible storage |
-| Containerisation and CI | Multi-stage Docker images, GitHub Actions on a self-hosted runner, image push to an in-cluster registry |
+| Model serving | KServe `InferenceService` (RawDeployment mode) on a custom MLServer runtime, loading whichever version the `champion` alias points to |
+| Containerisation and CI | Multi-stage Docker images, GitHub Actions for lint, type checks, tests and image builds, images pushed to an in-cluster registry |
 | GitOps delivery | Argo CD syncs this repo's `deploy/` overlays into the cluster |
 | Observability | Prometheus `ServiceMonitor`s, Grafana dashboards, model-quality and drift metrics |
 | Automated retraining | Scheduled training job, evaluation gates, promotion only when the challenger beats the champion |
