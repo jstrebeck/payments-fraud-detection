@@ -19,7 +19,7 @@ The `ServingRuntime` that uses the image and the `InferenceService` are in
 
 `kserve-mlserver` ships MLServer 1.5.0 (Python <= 3.11, MLflow 2.x) and only
 advertises `mlflow` model format versions 1 and 2. The registered model needs
-MLflow 3.16 (skops serialisation), scikit-learn 1.9, pandas 3 and Python 3.12.
+MLflow 3.17 (skops serialisation), scikit-learn 1.9, pandas 3 and Python 3.12.
 
 ## Interface
 

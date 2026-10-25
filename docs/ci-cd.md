@@ -52,7 +52,7 @@ PR path needs LAN access. Only delivery needs the homelab.
 - `trainer:<sha>` is chosen per run; the image carries `GIT_SHA`, which the
   trainer records on the MLflow run and model version.
 - The serving runtime image is versioned by its stack
-  (`serving:mlserver-1.7.1-mlflow-3.16.1`, ADR-0014) and changes rarely:
+  (`serving:mlserver-1.7.1-mlflow-3.17.2`, ADR-0014) and changes rarely:
   `make serving-image`.
 
 ## Deploy mechanism

@@ -12,7 +12,7 @@ SIM_ARGS ?= --rps 20 --duration 60s
 API_URL  ?= http://localhost:8000
 IMAGES   := payments-api simulator
 # Serving runtime image (ADR-0014): tagged by its stack, not the git SHA.
-SERVING_TAG ?= mlserver-1.7.1-mlflow-3.16.1
+SERVING_TAG ?= mlserver-1.7.1-mlflow-3.17.2
 DATA     := data/transactions.parquet
 
 # MLflow for host tools (train, promote). Defaults to the homelab server

@@ -11,7 +11,7 @@
 # needs the pyfunc loader that mlflow-skinny already provides.
 mlserver==1.7.1
 
-mlflow-skinny==3.16.1
+mlflow-skinny==3.17.2
 lightgbm==4.7.0
 scikit-learn==1.9.1
 skops==0.16.0

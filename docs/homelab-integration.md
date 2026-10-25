@@ -85,6 +85,14 @@ in the consumer's namespace.
    deploys are manual (`make release`, `make train-cluster`); see
    `docs/ci-cd.md`.
 
+### Maintenance
+
+9. **MLflow server 3.17.2**. **Pending:** this repo's clients and serving
+   runtime moved to `mlflow-skinny` 3.17.2 on 2026-10-25 to clear
+   vulnerable dependencies (GitPython, certifi). Bump
+   `Kubernetes/mlflow/Dockerfile` to `ghcr.io/mlflow/mlflow:v3.17.2` to match.
+   A 3.17 client against the 3.16.1 server is supported in the meantime.
+
 ## Endpoints this repo's config will reference
 
 Fill in as they come online.

@@ -18,7 +18,7 @@ data = [
 # MLflow client must match the homelab server's major version (ADR-0012).
 score = [
     "lightgbm>=4.7",
-    "mlflow-skinny>=3.16,<4",
+    "mlflow-skinny>=3.17.2,<4",
     "pandas>=3.0",
     "scikit-learn>=1.9",
     "skops>=0.16",  # MLflow's safe sklearn serialisation format (default in 3.x)
